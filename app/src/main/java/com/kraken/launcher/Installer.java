@@ -2,11 +2,13 @@ package com.kraken.launcher;
 
 import com.google.gson.*;
 
-        import javax.swing.*;
-        import java.io.File;
+import javax.swing.*;
+import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 
@@ -27,8 +29,8 @@ public class Installer {
                 return;
             }
 
+            // This is the .exe not the JAR.
             File currentJar = new File(Installer.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-            String jarName = currentJar.getName();
 
             File targetDir = new File(RUNELITE_DIR);
             if (!targetDir.exists()) {
@@ -36,11 +38,24 @@ public class Installer {
                 return;
             }
 
-            File targetJar = new File(targetDir, jarName);
+            String jarName;
 
-            // Copy the jar to the RuneLite directory (updates if already exists)
-            if (!currentJar.equals(targetJar)) {
-                Files.copy(currentJar.toPath(), targetJar.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            // Launcher is being installed via .exe not .jar so we need to grab the jar file
+            if (currentJar.getName().toLowerCase().endsWith(".exe")) {
+                jarName = "KrakenSetup.jar";
+                File targetJar = new File(targetDir, jarName);
+                URL url = new URL("https://minio.kraken-plugins.com/kraken-bootstrap-static/KrakenSetup.jar");
+                try (InputStream in = url.openStream()) {
+                    Files.copy(in, targetJar.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                }
+            } else {
+                jarName = currentJar.getName();
+                File targetJar = new File(targetDir, jarName);
+
+                // Copy the jar to the RuneLite directory (updates if already exists)
+                if (!currentJar.equals(targetJar)) {
+                    Files.copy(currentJar.toPath(), targetJar.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                }
             }
 
             updateConfigJson(jarName);
