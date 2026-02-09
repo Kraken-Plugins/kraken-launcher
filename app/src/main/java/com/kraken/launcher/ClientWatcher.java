@@ -7,7 +7,9 @@ import net.runelite.client.plugins.PluginManager;
 import net.runelite.client.ui.SplashScreen;
 
 import javax.inject.Inject;
+import javax.swing.*;
 import java.util.Collections;
+import java.util.List;
 
 /**
  * Waits for the RuneLite's splash screen to be closed. Once closed the client is started and the
@@ -28,20 +30,34 @@ public class ClientWatcher {
         new Thread(()-> {
             while(SplashScreen.isOpen()) {
                 try {
-                    Thread.sleep(100);
+                    Thread.sleep(500);
                 } catch(Exception ex) {
                     log.error("exception occurred while sleeping during splash screen: ", ex);
                 }
             }
-            log.info("Initializing Kraken loader plugin");
-            try{
-                Plugin krakenClient = pluginManager.loadPlugins(Collections.singletonList(krakenLoaderPlugin), null).get(0);
-                pluginManager.setPluginEnabled(krakenClient, true);
-                pluginManager.startPlugin(krakenClient);
-            } catch(Exception ex) {
-                log.error("failed to start Kraken loader plugin", ex);
-            }
+
+            SwingUtilities.invokeLater(() -> {
+                log.info("Initializing Kraken loader plugin (EDT Thread): {}", krakenLoaderPlugin.getName());
+                try {
+                    // It is critical that loadPlugins and startPlugin run on the EDT
+                    // to avoid racing with RuneLite's Config/Profile manager.
+                    List<Plugin> loadedPlugins = pluginManager.loadPlugins(Collections.singletonList(krakenLoaderPlugin), null);
+                    if (loadedPlugins.isEmpty()) {
+                        log.error("PluginManager failed to load Kraken plugin (returned empty list)");
+                        return;
+                    }
+
+                    Plugin krakenClient = loadedPlugins.get(0);
+                    pluginManager.setPluginEnabled(krakenClient, true);
+                    pluginManager.startPlugin(krakenClient);
+
+                    log.info("Kraken plugin started successfully on EDT thread.");
+                } catch (AssertionError ae) {
+                    log.error("AssertionError during Kraken startup. User might have -ea enabled or Profile state is invalid.", ae);
+                } catch (Exception ex) {
+                    log.error("failed to start Kraken loader plugin", ex);
+                }
+            });
         }).start();
     }
-
 }

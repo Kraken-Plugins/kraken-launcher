@@ -11,6 +11,7 @@ import java.io.InputStream;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.util.Arrays;
 
 public class Installer {
 
@@ -67,8 +68,8 @@ public class Installer {
                     JOptionPane.INFORMATION_MESSAGE);
 
         } catch (Exception e) {
+            showError("Installation failed: " + e.getMessage() + " Stack Trace: " + Arrays.asList(e.getStackTrace()));
             e.printStackTrace();
-            showError("Installation failed: " + e.getMessage());
         }
     }
 
