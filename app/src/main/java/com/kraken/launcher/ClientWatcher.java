@@ -18,11 +18,18 @@ import java.util.List;
 @Slf4j
 public class ClientWatcher {
 
-    @Inject
-    private EventBus eventBus;
+    private final EventBus eventBus;
+    private final PluginManager pluginManager;
 
     @Inject
-    private PluginManager pluginManager;
+    public ClientWatcher(EventBus eventBus, PluginManager pluginManager) {
+        this.eventBus = eventBus;
+        this.pluginManager = pluginManager;
+
+        if(eventBus == null || pluginManager == null) {
+            log.error("EventBus or PluginManager instance is null. Cannot proceed to load Kraken loader plugin.");
+        }
+    }
 
     public void start(Class<?> krakenLoaderPlugin) {
         eventBus.register(this);
