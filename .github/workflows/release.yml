@@ -58,6 +58,44 @@ jobs:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: ./gradlew shadowJar createExe --no-daemon
 
+      - name: Download Windows JRE
+        run: |
+          JRE_URL="https://api.adoptium.net/v3/binary/latest/11/ga/windows/x64/jre/hotspot/normal/eclipse"
+          
+          echo "Downloading Windows JRE..."
+          wget -O windows-jre.zip "$JRE_URL"
+          
+          echo "Unzipping..."
+          unzip -q windows-jre.zip -d temp_jre
+          
+          # The zip usually contains a root folder like 'jdk-11.0.18+10-jre', find it and move contents
+          JRE_ROOT=$(ls temp_jre | head -n 1)
+          mv "temp_jre/$JRE_ROOT" jre-windows
+          
+          rm windows-jre.zip
+          rm -rf temp_jre
+          
+      - name: Create Distribution Bundle
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          EXE_FILE="app/build/launch4j/KrakenInstaller.exe"
+          
+          # Create a staging directory
+          mkdir -p dist/KrakenLauncher
+          
+          # Copy the Exe
+          cp "$EXE_FILE" dist/KrakenLauncher/
+          
+          # Copy the JRE folder into the staging directory named 'jre'
+          # This matches 'bundledJrePath = jre' in your gradle file
+          cp -r jre-windows dist/KrakenLauncher/jre
+          
+          # Zip it all up
+          cd dist
+          zip -r "KrakenLauncher-v$VERSION-Windows.zip" KrakenLauncher
+          
+          echo "DIST_FILE=dist/KrakenLauncher-v$VERSION-Windows.zip" >> $GITHUB_ENV
+
       - name: Create and Push Git Tag
         run: |
           git config user.name "github-actions[bot]"
@@ -87,13 +125,10 @@ jobs:
       - name: Upload to MinIO
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
-          JAR_FILE=$(find app/build/libs -name "*-fat.jar" | head -n 1)
-          EXE_FILE="app/build/launch4j/KrakenInstaller.exe"
-          
+          JAR_FILE=$(find app/build/libs -name "*-fat.jar" | head -n 1)          
           echo "Processing Version: $VERSION"
           
-          # Rename and upload
-          mc cp "$EXE_FILE" "s3/kraken-bootstrap-static/KrakenSetup.exe"
+          mc cp "${{ env.DIST_FILE }}" "s3/kraken-bootstrap-static/KrakenLauncher-Windows.zip"
           mc cp "$JAR_FILE" "s3/kraken-bootstrap-static/KrakenSetup.jar"
 
       - name: Create GitHub Release

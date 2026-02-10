@@ -1,18 +1,17 @@
 package com.kraken.launcher;
 
 import com.google.gson.*;
+import lombok.extern.slf4j.Slf4j;
 
 import javax.swing.*;
-import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
+import java.util.stream.Collectors;
 
+@Slf4j
 public class Installer {
 
     private static final String OS_NAME = System.getProperty("os.name").toLowerCase();
@@ -26,6 +25,7 @@ public class Installer {
     public static void main(String[] args) {
         try {
             if (!IS_WINDOWS && !IS_MAC || RUNELITE_DIR == null) {
+                log.error("Installer not running on a windows or mac machine, exiting.");
                 showError("This installer is designed for Windows and macOS only.");
                 return;
             }
@@ -35,6 +35,7 @@ public class Installer {
 
             File targetDir = new File(RUNELITE_DIR);
             if (!targetDir.exists()) {
+                log.error("No runelite installation exists. Please install RuneLite first.");
                 showError("RuneLite installation not found at: " + RUNELITE_DIR + "\nPlease install RuneLite first.");
                 return;
             }
@@ -45,11 +46,13 @@ public class Installer {
             if (currentJar.getName().toLowerCase().endsWith(".exe")) {
                 jarName = "KrakenSetup.jar";
                 File targetJar = new File(targetDir, jarName);
-                URL url = new URL("https://minio.kraken-plugins.com/kraken-bootstrap-static/KrakenSetup.jar");
+                URL url = new URL("https://minio.kraken-plugins.com/kraken-bootstrap-static/" + jarName);
+                log.info("Running as .exe file, fetching JAR from MinIO: {}", url);
                 try (InputStream in = url.openStream()) {
                     Files.copy(in, targetJar.toPath(), StandardCopyOption.REPLACE_EXISTING);
                 }
             } else {
+                log.info("Running as jar file, copying self to RuneLite directory.");
                 jarName = currentJar.getName();
                 File targetJar = new File(targetDir, jarName);
 
@@ -68,7 +71,10 @@ public class Installer {
                     JOptionPane.INFORMATION_MESSAGE);
 
         } catch (Exception e) {
-            showError("Installation failed: " + e.getMessage() + " Stack Trace: " + Arrays.asList(e.getStackTrace()));
+            showError("Installation failed: " + e.getMessage() + " \nStack Trace: " + Arrays.stream(e.getStackTrace())
+                    .map(StackTraceElement::toString)
+                    .map(line -> "\tat " + line)
+                    .collect(Collectors.joining(System.lineSeparator())));
             e.printStackTrace();
         }
     }
@@ -85,8 +91,11 @@ public class Installer {
     private static void updateConfigJson(String jar) throws IOException {
         File configFile = new File(CONFIG_FILE);
         if (!configFile.exists()) {
+            log.error("No config.json file found in the RuneLite dir. Is runelite installed?");
             throw new IOException("config.json not found in RuneLite directory.");
         }
+
+        log.info("Updating config.json file in RuneLite...");
 
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
         JsonObject configObject;
@@ -123,6 +132,8 @@ public class Installer {
         try (FileWriter writer = new FileWriter(configFile)) {
             gson.toJson(configObject, writer);
         }
+
+        log.info("Config.json file updated successfully.");
     }
 
     private static void showError(String message) {

@@ -27,6 +27,10 @@ dependencies {
     compileOnly 'org.projectlombok:lombok:1.18.30'
     annotationProcessor 'org.projectlombok:lombok:1.18.30'
 
+    implementation 'org.slf4j:slf4j-api:1.7.36'
+    implementation("org.slf4j:slf4j-simple:1.7.36")
+    implementation 'ch.qos.logback:logback-classic:1.2.12'
+
     compileOnly group: 'net.runelite', name:'client', version: runeLiteVersion
     testImplementation 'junit:junit:4.12'
     testImplementation group: 'net.runelite', name:'client', version: runeLiteVersion
@@ -81,13 +85,12 @@ launch4j {
     jarTask = tasks.shadowJar
 
     outfile = 'KrakenInstaller.exe'
+    bundledJrePath = 'jre'
     headerType = 'gui'
     errTitle = 'Kraken Launcher Error'
     downloadUrl = 'https://kraken-plugins.com/download'
-    jreMinVersion = '1.8.0'
+    supportUrl = "https://kraken-plugins.com/docs/client/download.html"
+    companyName = "Kraken Plugins"
+    jreMinVersion = '1.11.0'
     icon = "${projectDir}/src/main/resources/favicon.ico"
-
-    // Ensure we don't wrap the jar inside the exe if we want it to be extracted,
-    // but usually for a single-file installer, wrapping is preferred.
-    // The plugin defaults will wrap the jar into the exe.
 }
