@@ -48,6 +48,13 @@ public class ClientWatcher {
                     }
 
                     Plugin krakenClient = loadedPlugins.get(0);
+
+                    // Check if RuneLite auto-started this plugin from config
+                    if (pluginManager.isPluginActive(krakenClient)) {
+                        log.warn("Kraken Loader was auto-started by RuneLite (Zombie state). Restarting...");
+                        pluginManager.stopPlugin(krakenClient);
+                    }
+
                     pluginManager.setPluginEnabled(krakenClient, true);
                     pluginManager.startPlugin(krakenClient);
 
