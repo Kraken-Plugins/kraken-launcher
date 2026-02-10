@@ -62,7 +62,7 @@ the launcher uses Reflection on the `com.google.inject.Injector` interface to ac
 The `ClientWatcher` is instantiated via the Guice Injector and waits for the Splash Screen to close, then uses 
 `PluginManager` to forcefully load the Kraken Plugin.
 
-## 🏗️ Building from Source
+## Building from Source
 This project uses Gradle as the build tool. You can build the shaded JAR file using the following command:
 
 ```shell
@@ -71,7 +71,13 @@ This project uses Gradle as the build tool. You can build the shaded JAR file us
 
 The output will be in `build/libs/kraken-launcher-1.0.0-fat.jar`.
 
-You can also build a `.exe` file for easy Windows installation using: `./gradlew clean createExe`
+## Executable File
+
+You can also build a `.exe` file for easy Windows installation using: `./gradlew clean createExe` which uses launch4j. 
+Note that to run the executable, you will need to have a folder named: `jre` in the same directory as the executable (`app/build/launch4j/jre`).
+
+You can download the Java 11 [JRE here](https://api.adoptium.net/v3/binary/latest/11/ga/windows/x64/jre/hotspot/normal/eclipse) and
+name it `jre`. If you omit this step, you will receive an error saying the executable requires java 11 to run.
 
 ## Built With
 

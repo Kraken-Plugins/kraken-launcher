@@ -83,10 +83,11 @@ launch4j {
     // Use the output of shadowJar (the fat jar) instead of the default thin jar
     copyConfigurable = []
     jarTask = tasks.shadowJar
-
+    manifest = "${projectDir}/src/main/resources/app.manifest"
     outfile = 'KrakenInstaller.exe'
     bundledJrePath = 'jre'
-    headerType = 'gui'
+    headerType = 'console' // 'console' if you'd like to see whats happening
+    stayAlive = true
     errTitle = 'Kraken Launcher Error'
     downloadUrl = 'https://kraken-plugins.com/download'
     supportUrl = "https://kraken-plugins.com/docs/client/download.html"
