@@ -11,9 +11,11 @@ import lombok.extern.slf4j.Slf4j;
 import javax.inject.Inject;
 import javax.swing.*;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.net.*;
 import java.util.Arrays;
+import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -27,8 +29,8 @@ import java.util.regex.Pattern;
 @Slf4j
 public class Launcher {
 
-    public static final String VERSION = "1.0.1";
-    private static final long CLASSLOADER_POLL_INTERVAL_MS = 100;
+    public static final String VERSION = loadVersion();
+    private static final long CLASSLOADER_POLL_INTERVAL_MS = 500;
     private static final long SHUTDOWN_TIMEOUT_SECONDS = 10;
     private static final String RUNELITE_PACKAGE = "net.runelite.client.rs";
     private static final String LAUNCHER_CLASS = "net.runelite.launcher.Launcher";
@@ -85,6 +87,24 @@ public class Launcher {
 
         executorService.submit(() -> patchLauncher(preferences));
         return true;
+    }
+
+    /**
+     * Loads the version dynamically from the kraken-version properties file
+     * @return String semantic version i.e. 1.0.5
+     */
+    private static String loadVersion() {
+        try (InputStream is = Launcher.class.getResourceAsStream("/kraken-version.properties")) {
+            if (is == null) {
+                return "DEV"; // Fallback if file is missing (e.g. inside IDE without build)
+            }
+            Properties props = new Properties();
+            props.load(is);
+            return props.getProperty("version", "Unknown");
+        } catch (Exception e) {
+            log.error("Failed to load version", e);
+            return "Error";
+        }
     }
 
     /**
@@ -349,7 +369,7 @@ public class Launcher {
         }
 
         if (!uri.getPath().endsWith(".jar")) {
-            uri = uri.resolve("kraken-launcher-" + VERSION + "-fat.jar");
+            uri = uri.resolve("kraken-launcher-1.0.0-fat.jar");
         }
 
         return uri.toURL();
@@ -431,8 +451,8 @@ public class Launcher {
                 log.info("Force showing UI, --force-ui arg passed");
                 gui.setVisible(true);
             } else if(gui.getPreferences().isSkipLauncher()) {
-                log.info("Skipping Kraken Launcher UI and starting RuneLite {}", configure ? "(Configure)" : "");
-                gui.onStartClicked(configure);
+                log.info("Skipping Kraken Launcher UI and starting RuneLite");
+                gui.onStartClicked(false);
             } else {
                 gui.setVisible(true);
             }
