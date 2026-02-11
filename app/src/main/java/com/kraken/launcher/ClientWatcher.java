@@ -37,7 +37,7 @@ public class ClientWatcher {
         new Thread(()-> {
             while(SplashScreen.isOpen()) {
                 try {
-                    Thread.sleep(500);
+                    Thread.sleep(2000);
                 } catch(Exception ex) {
                     log.error("exception occurred while sleeping during splash screen: ", ex);
                 }
