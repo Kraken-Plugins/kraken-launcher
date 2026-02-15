@@ -27,6 +27,11 @@ dependencies {
     compileOnly 'org.projectlombok:lombok:1.18.30'
     annotationProcessor 'org.projectlombok:lombok:1.18.30'
 
+    // Required since these need to use system classloader so they can't be included
+    // dynamically in the bootstrap.
+    implementation("net.bytebuddy:byte-buddy:1.18.4")
+    implementation("net.bytebuddy:byte-buddy-agent:1.18.4")
+
     implementation 'org.slf4j:slf4j-api:1.7.36'
     implementation("org.slf4j:slf4j-simple:1.7.36")
     implementation 'ch.qos.logback:logback-classic:1.2.12'
@@ -73,7 +78,11 @@ shadowJar {
 
     manifest {
         attributes(
-                'Main-Class': 'com.kraken.launcher.Installer'
+                'Main-Class': 'com.kraken.launcher.Installer',
+                'Premain-Class': 'net.bytebuddy.agent.Installer',
+                'Agent-Class': 'net.bytebuddy.agent.Installer',
+                'Can-Retransform-Classes': 'true',
+                'Can-Redefine-Classes': 'true'
         )
     }
 }

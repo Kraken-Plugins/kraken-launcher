@@ -128,12 +128,28 @@ public class Installer {
 
         configObject.addProperty("mainClass", TARGET_MAIN_CLASS);
 
-        // Create a fresh classPath array with only the required jars
         JsonArray classPath = new JsonArray();
         classPath.add("RuneLite.jar");
         classPath.add(jar);
         configObject.add("classPath", classPath);
 
+        // Get the existing vmArgs array, or create one if it doesn't exist
+        JsonArray existingVmArgs = configObject.has("vmArgs")
+                ? configObject.getAsJsonArray("vmArgs")
+                : new JsonArray();
+
+        JsonArray updatedVmArgs = new JsonArray();
+
+        updatedVmArgs.add("-javaagent:" + jar);
+
+        for (com.google.gson.JsonElement argElement : existingVmArgs) {
+            String arg = argElement.getAsString();
+            if (!arg.startsWith("-javaagent:")) {
+                updatedVmArgs.add(arg);
+            }
+        }
+
+        configObject.add("vmArgs", updatedVmArgs);
         String jsonOutput = gson.toJson(configObject);
 
         log.info("Writing to config.json:\n{}", jsonOutput);

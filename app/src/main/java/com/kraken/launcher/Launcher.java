@@ -12,6 +12,7 @@ import javax.inject.Inject;
 import javax.swing.*;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.instrument.Instrumentation;
 import java.lang.reflect.Method;
 import java.net.*;
 import java.util.Arrays;
@@ -21,6 +22,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import static net.bytebuddy.agent.ByteBuddyAgent.getInstrumentation;
 
 
 /**
@@ -430,6 +433,15 @@ public class Launcher {
 
     public static void main(String[] args) {
         log.info("Starting Kraken Launcher");
+
+        try {
+            Instrumentation inst = getInstrumentation();
+            log.info("ByteBuddy Java Agent, installed successfully {}", inst);
+        } catch (IllegalStateException e) {
+            log.warn("WARN: ByteBuddy Java Agent was not installed.");
+            log.warn("WARN: The JVM was not started with the correct -javaagent argument, or the JAR manifest is missing the Premain-Class. This will not prevent your plugins from working.");
+        }
+
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
         } catch (Exception e) {
