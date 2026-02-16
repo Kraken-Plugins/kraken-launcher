@@ -118,6 +118,9 @@ public class Installer {
             throw new IOException("config.json not found in RuneLite directory.");
         }
 
+        // Make writable just in case the installer was run previously and locked it
+        configFile.setWritable(true, false);
+
         log.info("Updating config.json file to use the Kraken launcher...");
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
         JsonObject configObject;
@@ -142,7 +145,7 @@ public class Installer {
 
         updatedVmArgs.add("-javaagent:" + jar);
 
-        for (com.google.gson.JsonElement argElement : existingVmArgs) {
+        for (JsonElement argElement : existingVmArgs) {
             String arg = argElement.getAsString();
             if (!arg.startsWith("-javaagent:")) {
                 updatedVmArgs.add(arg);
@@ -156,6 +159,13 @@ public class Installer {
 
         try (FileWriter writer = new FileWriter(configFile)) {
             writer.write(jsonOutput);
+        }
+
+        // 2. LOCK: Make it read-only so RuneLite's self-healing update process fails to overwrite it
+        if (configFile.setWritable(false, false)) {
+            log.info("Successfully locked config.json as Read-Only.");
+        } else {
+            log.warn("Failed to lock config.json. RuneLite might overwrite the injected vmArgs.");
         }
 
         log.info("config.json file updated successfully.");
