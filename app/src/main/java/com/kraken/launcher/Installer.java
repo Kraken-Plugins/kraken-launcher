@@ -74,6 +74,13 @@ public class Installer {
 
             updateConfigJson(jarName);
 
+            if(IS_MAC) {
+                if(!fixMacGatekeeper()) {
+                    showError("Administrator privileges are required in order to allow Kraken modifications to RuneLite.");
+                    return;
+                }
+            }
+
             ImageIcon customIcon = loadCustomIcon();
             JOptionPane.showMessageDialog(null,
                     "Kraken Launcher installed successfully!\n\n" +
@@ -108,7 +115,7 @@ public class Installer {
     /**
      * Updates the config.json file in the RuneLite directory to point to the Kraken launchers main class
      * and adds the Kraken launcher to the RuneLite classpath.
-     * @param jar
+     * @param jar The path to the jar file
      * @throws IOException
      */
     private static void updateConfigJson(String jar) throws IOException {
@@ -145,9 +152,33 @@ public class Installer {
 
         updatedVmArgs.add("-javaagent:" + jar);
 
+        java.util.List<String> macRequiredArgs = Arrays.asList(
+                "--add-opens=java.desktop/com.apple.eawt=ALL-UNNAMED",
+                "--add-exports=java.desktop/com.apple.eawt=ALL-UNNAMED",
+                "--add-opens=java.base/java.net=ALL-UNNAMED",
+                "--add-exports=java.base/java.net=ALL-UNNAMED",
+                "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+                "--add-exports=java.base/java.lang.reflect=ALL-UNNAMED",
+                "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                "--add-exports=java.base/java.lang=ALL-UNNAMED",
+                "--add-opens=java.base/jdk.internal.reflect=ALL-UNNAMED",
+                "--add-exports=java.base/jdk.internal.reflect=ALL-UNNAMED"
+        );
+
+        if (IS_MAC) {
+            for (String macArg : macRequiredArgs) {
+                updatedVmArgs.add(macArg);
+            }
+        }
+
+
         for (JsonElement argElement : existingVmArgs) {
             String arg = argElement.getAsString();
-            if (!arg.startsWith("-javaagent:")) {
+
+            boolean isOldJavaAgent = arg.startsWith("-javaagent:");
+            boolean isDuplicateMacArg = IS_MAC && macRequiredArgs.contains(arg);
+
+            if (!isOldJavaAgent && !isDuplicateMacArg) {
                 updatedVmArgs.add(arg);
             }
         }
@@ -169,6 +200,31 @@ public class Installer {
         }
 
         log.info("config.json file updated successfully.");
+    }
+
+    /**
+     * Uses macOS native AppleScript to prompt the user for admin privileges
+     * and fixes the Gatekeeper/Code Signing issues on the modified .app bundle.
+     */
+    private static boolean fixMacGatekeeper() throws IOException, InterruptedException {
+        log.info("Prompting user for admin privileges to fix macOS Gatekeeper...");
+
+        // The AppleScript command to run shell scripts as admin
+        // We run both xattr and codesign to ensure it works on newer macOS versions (Sonoma/Sequoia)
+        String appleScript = "do shell script \"xattr -cr /Applications/RuneLite.app && codesign --force --deep --sign - /Applications/RuneLite.app\" with administrator privileges";
+
+        String[] cmd = {"osascript", "-e", appleScript};
+
+        Process process = Runtime.getRuntime().exec(cmd);
+        int exitCode = process.waitFor();
+
+        if (exitCode != 0) {
+            log.error("Failed to apply macOS Gatekeeper fixes. User may have canceled the prompt. Exit code: {}", exitCode);
+            return false;
+        }
+
+        log.info("macOS Gatekeeper and Code Signing fixed successfully.");
+        return true;
     }
 
     /**
