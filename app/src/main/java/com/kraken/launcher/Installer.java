@@ -1,6 +1,7 @@
 package com.kraken.launcher;
 
 import com.google.gson.*;
+import com.kraken.launcher.util.Utils;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.swing.*;
@@ -15,12 +16,7 @@ import java.util.stream.Collectors;
 @Slf4j
 public class Installer {
 
-    private static final String OS_NAME = System.getProperty("os.name").toLowerCase();
-    private static final boolean IS_WINDOWS = OS_NAME.contains("win");
-    private static final boolean IS_MAC = OS_NAME.contains("mac");
-
-    private static final String RUNELITE_DIR = getRuneLiteDirectory();
-    private static final String CONFIG_FILE = RUNELITE_DIR + File.separator + "config.json";
+    private static final String CONFIG_FILE = Utils.RUNELITE_DIR + File.separator + "config.json";
     private static final String TARGET_MAIN_CLASS = "com.kraken.launcher.Launcher";
 
     public static void main(String[] args) {
@@ -33,7 +29,7 @@ public class Installer {
         }
 
         try {
-            if (!IS_WINDOWS && !IS_MAC || RUNELITE_DIR == null) {
+            if (!Utils.IS_WINDOWS && !Utils.IS_MAC || Utils.RUNELITE_DIR == null) {
                 log.error("Installer not running on a windows or mac machine, exiting.");
                 showError("This installer is designed for Windows and macOS only.");
                 return;
@@ -42,10 +38,10 @@ public class Installer {
             // This is the .exe not the JAR.
             File currentJar = new File(Installer.class.getProtectionDomain().getCodeSource().getLocation().toURI());
 
-            File targetDir = new File(RUNELITE_DIR);
+            File targetDir = new File(Utils.RUNELITE_DIR);
             if (!targetDir.exists()) {
                 log.error("No runelite installation exists. Please install RuneLite first.");
-                showError("RuneLite installation not found at: " + RUNELITE_DIR + "\nPlease install RuneLite first.");
+                showError("RuneLite installation not found at: " + Utils.RUNELITE_DIR + "\nPlease install RuneLite first.");
                 return;
             }
 
@@ -74,7 +70,7 @@ public class Installer {
 
             updateConfigJson(jarName);
 
-            if(IS_MAC) {
+            if(Utils.IS_MAC) {
                 if(!fixMacGatekeeper()) {
                     showError("Administrator privileges are required in order to allow Kraken modifications to RuneLite.");
                     return;
@@ -97,19 +93,6 @@ public class Installer {
                     .collect(Collectors.joining(System.lineSeparator())));
             log.error("Failed to install the Kraken launcher: ", e);
         }
-    }
-
-    /**
-     * Returns the RuneLite directory for either MacOS or Windows.
-     * @return String the runelite directory where the config.json file and JAR files are stored.
-     */
-    private static String getRuneLiteDirectory() {
-        if (IS_WINDOWS) {
-            return System.getenv("LOCALAPPDATA") + "\\RuneLite";
-        } else if (IS_MAC) {
-            return "/Applications/RuneLite.app/Contents/Resources";
-        }
-        return null;
     }
 
     /**
@@ -165,7 +148,7 @@ public class Installer {
                 "--add-exports=java.base/jdk.internal.reflect=ALL-UNNAMED"
         );
 
-        if (IS_MAC) {
+        if (Utils.IS_MAC) {
             for (String macArg : macRequiredArgs) {
                 updatedVmArgs.add(macArg);
             }
@@ -176,7 +159,7 @@ public class Installer {
             String arg = argElement.getAsString();
 
             boolean isOldJavaAgent = arg.startsWith("-javaagent:");
-            boolean isDuplicateMacArg = IS_MAC && macRequiredArgs.contains(arg);
+            boolean isDuplicateMacArg = Utils.IS_MAC && macRequiredArgs.contains(arg);
 
             if (!isOldJavaAgent && !isDuplicateMacArg) {
                 updatedVmArgs.add(arg);
@@ -229,7 +212,7 @@ public class Installer {
 
     /**
      * Shows an error dialogue with information about what went wrong.
-     * @param message
+     * @param message The error message to show
      */
     private static void showError(String message) {
         JOptionPane.showMessageDialog(null, message, "Installer Error", JOptionPane.ERROR_MESSAGE);

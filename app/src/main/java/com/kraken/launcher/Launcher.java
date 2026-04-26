@@ -6,9 +6,10 @@ import com.kraken.launcher.bootstrap.model.Bootstrap;
 import com.kraken.launcher.ui.FatalErrorDialog;
 import com.kraken.launcher.ui.LauncherPreferences;
 import com.kraken.launcher.ui.LauncherUI;
+import com.kraken.launcher.util.Utils;
 import lombok.extern.slf4j.Slf4j;
+import net.bytebuddy.agent.ByteBuddyAgent;
 
-import javax.inject.Inject;
 import javax.swing.*;
 import java.io.IOException;
 import java.io.InputStream;
@@ -41,7 +42,6 @@ public class Launcher {
     private final ExecutorService executorService;
     private final BootstrapDownloader bootstrapDownloader; // Class internally caches the bootstrap files for both RuneLite and Kraken
 
-    @Inject
     public Launcher(BootstrapDownloader downloader) {
         this.bootstrapDownloader = downloader;
         this.executorService = Executors.newSingleThreadExecutor(r -> {
@@ -52,9 +52,105 @@ public class Launcher {
     }
 
     /**
-     * Starts the hijack process asynchronously.
+     * Starts the launcher with preferences from the GUI
      */
-    public boolean start(LauncherPreferences preferences) {
+    public static void startWithPreferences(LauncherPreferences preferences, boolean configure) {
+        System.setProperty("runelite.launcher.nojvm", "true");
+        System.setProperty("runelite.launcher.reflect", "true");
+
+        // Set proxy system property if specified
+        if (preferences.getProxy() != null && !preferences.getProxy().isEmpty()) {
+            System.setProperty("kraken.proxy", preferences.getProxy());
+            log.info("Proxy configured: {}", preferences.getProxy());
+        }
+
+        Launcher launcher = new Launcher(new BootstrapDownloader());
+
+        // Skip launcher.start() if RuneLite mode is enabled
+        if (preferences.isRuneliteMode()) {
+            log.info("RuneLite mode enabled - skipping Kraken bootstrap");
+        } else {
+            if (!launcher.patch(preferences)) {
+                log.info("Kraken Launcher failed to start, see error messages above.");
+                return;
+            }
+        }
+
+        try {
+            // When running from the IDE, the RuneLite.jar is not on the classpath, so it must be dynamically found and added to resolve
+            // net.runelite.launcher.Launcher class. When running through Jagex launcher, the config.json file already specifies both RuneLite.jar and KrakenSetup.jar
+            // on the classpath, so additional injection is unnecessary and will be skipped.
+            Utils.injectRuneLiteLauncher();
+            Class<?> launcherClass = Class.forName(LAUNCHER_CLASS);
+            String[] args = new String[]{};
+
+            if(configure) {
+                log.info("Starting Launcher (Configure)");
+                args = new String[]{"--configure"};
+            }
+
+            launcherClass.getMethod("main", String[].class).invoke(null, (Object) args);
+        } catch (Exception e) {
+            log.error("Failed to start RuneLite launcher", e);
+            launcher.shutdown();
+            System.exit(1);
+        }
+
+        Runtime.getRuntime().addShutdownHook(new Thread(launcher::shutdown, "com.kraken.launcher.shutdown"));
+    }
+
+    public static void main(String[] args) {
+        log.info("Starting Kraken Launcher");
+
+        try {
+            Instrumentation inst = getInstrumentation();
+            log.info("ByteBuddy Java Agent, installed successfully {}", inst);
+        } catch (IllegalStateException e) {
+            // When running directly via IDE, this installs into the current jvm without the need
+            // for extra VM Args like "-javaagent:JarFileWithByteBuddyAgent.jar"
+            try {
+                ByteBuddyAgent.install();
+                log.info("ByteBuddy Java Agent, installed successfully {}", getInstrumentation());
+            } catch (IllegalStateException ex) {
+                log.warn("ByteBuddy Java Agent was not installed. The JVM was not started with the correct -javaagent argument, or the JAR manifest is missing the Premain-Class. " +
+                        "Kraken dependency injection will be unavailable until the launcher is started with instrumentation.");
+            }
+        }
+
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception e) {
+            log.warn("Failed to set system look and feel: ", e);
+        }
+
+        boolean forceShowUI = Arrays.asList(args).contains("--force-ui");
+        boolean configure = Arrays.asList(args).contains("--configure");
+
+        SwingUtilities.invokeLater(() -> {
+            LauncherUI gui = new LauncherUI();
+
+            if(configure) {
+                gui.onStartClicked(true);
+                return;
+            }
+
+            if(forceShowUI) {
+                log.info("Force showing UI, --force-ui arg passed");
+                gui.setVisible(true);
+            } else if(gui.getPreferences().isSkipLauncher()) {
+                log.info("Skipping Kraken Launcher UI and starting RuneLite");
+                gui.onStartClicked(false);
+            } else {
+                gui.setVisible(true);
+            }
+        });
+    }
+
+    /**
+     * Starts the hijack process asynchronously by patching
+     * the bootstrap and loading the Kraken client plugin.
+     */
+    public boolean patch(LauncherPreferences preferences) {
         try {
             bootstrapDownloader.downloadKrakenBootstrap();
             bootstrapDownloader.downloadRuneLiteBootstrap();
@@ -88,7 +184,8 @@ public class Launcher {
             return false;
         }
 
-        executorService.submit(() -> patchLauncher(preferences));
+        log.info("Kraken bootstrap verified, starting client patching process.");
+        executorService.execute(() -> patchLauncher(preferences));
         return true;
     }
 
@@ -126,9 +223,8 @@ public class Launcher {
     }
 
     /**
-     * Patches the launcher by hooking into the RuneLite URLClassLoader to load additional custom classes. This
-     * loads JAR artifacts from the bootstrap in order to make sure the launcher has all the Kraken dependencies
-     * on the classpath when the Kraken Client plugin loads.
+     * Prepares the parent/system loader with the launcher and Kraken artifacts so RuneLite can resolve them
+     * without reflectively mutating RuneLite's own class loader.
      */
     private void patchLauncher(LauncherPreferences preferences) {
         if(!preferences.getProxy().isEmpty()) {
@@ -144,11 +240,14 @@ public class Launcher {
             }
 
             URLClassLoader urlClassLoader = (URLClassLoader) classLoader;
-            URL launcherJarUrl = resolveJarUrl();
 
-            addUrlToClassLoader(urlClassLoader, launcherJarUrl);
+            addUrlToClassLoader(urlClassLoader, resolveJarUrl());
+
+            // Enables Launcher to be run via IDE instead of Jagex launcher for testing.
+            addUrlToClassLoader(urlClassLoader, ClientWatcher.class.getProtectionDomain().getCodeSource().getLocation());
+
             for(Artifact artifact : bootstrapDownloader.getKrakenBootstrap().getArtifacts()) {
-                log.info("Adding to CP: {}", artifact.getName());
+                log.debug("Adding JAR to RuneLite classpath: {}", artifact.getName());
                 addUrlToClassLoader(urlClassLoader, new URL(artifact.getPath()));
 
                 if(artifact.getName().toLowerCase().startsWith("kraken-client-")) {
@@ -165,7 +264,7 @@ public class Launcher {
             // Once created it can be used to load the Kraken Client plugin
             new Thread(() -> {
                 try {
-                    Class<?> runeLiteClass = urlClassLoader.loadClass("net.runelite.client.RuneLite");
+                    Class<?> runeLiteClass = classLoader.loadClass("net.runelite.client.RuneLite");
                     Method getInjectorMethod = runeLiteClass.getDeclaredMethod("getInjector");
 
                     Object injector = null;
@@ -181,11 +280,11 @@ public class Launcher {
                         }
                     }
 
-                    Class<?> watcherClass = urlClassLoader.loadClass("com.kraken.launcher.ClientWatcher");
-                    Class<?> krakenPluginMainClass = urlClassLoader.loadClass("com.krakenclient.KrakenLoaderPlugin");
+                    Class<?> watcherClass = classLoader.loadClass("com.kraken.launcher.ClientWatcher");
+                    Class<?> krakenPluginMainClass = classLoader.loadClass("com.krakenclient.KrakenLoaderPlugin");
 
                     // Load the Injector INTERFACE to avoid IllegalAccessException on the internal Impl class
-                    Class<?> injectorInterface = urlClassLoader.loadClass("com.google.inject.Injector");
+                    Class<?> injectorInterface = classLoader.loadClass("com.google.inject.Injector");
                     Method getInstanceMethod = injectorInterface.getMethod("getInstance", Class.class);
                     Object watcherInstance = getInstanceMethod.invoke(injector, watcherClass);
 
@@ -203,8 +302,66 @@ public class Launcher {
         } catch (InterruptedException e) {
             log.warn("Client patching process interrupted: ", e);
             Thread.currentThread().interrupt();
+        } catch (Throwable e) {
+            log.error("CRITICAL: failed to patch RuneLite client: ", e);
+        }
+    }
+
+    /**
+     * Configures network traffic to be relayed through a provided SOCKS5 proxy.
+     * @param proxyString The proxy string in the format ip:port:user:pass
+     */
+    private static void configureProxy(String proxyString) {
+        try {
+            String[] parts = proxyString.split(":");
+            if (parts.length != 2 && parts.length != 4) {
+                log.error("Invalid proxy format. Expected IP:PORT or IP:PORT:USER:PASS, got: {}", proxyString);
+                return;
+            }
+
+            String proxyHost = parts[0];
+            String proxyPort = parts[1];
+            String proxyUser = parts.length == 4 ? parts[2] : "";
+            String proxyPass = parts.length == 4 ? parts[3] : "";
+
+            log.info("Configuring SOCKS5 proxy: {}:{}", proxyHost, proxyPort);
+
+            // Set SOCKS proxy (this handles both TCP and UDP traffic)
+            System.setProperty("socksProxyHost", proxyHost);
+            System.setProperty("socksProxyPort", proxyPort);
+            System.setProperty("socksProxyVersion", "5");
+
+            // For SOCKS5, we don't set HTTP/HTTPS proxy properties as they would take precedence
+            // and bypass the SOCKS proxy
+
+            // Configure SOCKS authentication if credentials provided
+            if (!proxyUser.isEmpty() && !proxyPass.isEmpty()) {
+                System.setProperty("java.net.socks.username", proxyUser);
+                System.setProperty("java.net.socks.password", proxyPass);
+
+                // Set up authenticator for SOCKS authentication
+                Authenticator.setDefault(new Authenticator() {
+                    @Override
+                    protected PasswordAuthentication getPasswordAuthentication() {
+                        if (getRequestorType() == RequestorType.PROXY) {
+                            // Check if this is a SOCKS proxy request
+                            String protocol = getRequestingProtocol();
+                            log.info("Requesting proxy protocol: {}", protocol);
+                            if (protocol != null && protocol.toLowerCase().contains("socks")) {
+                                return new PasswordAuthentication(proxyUser, proxyPass.toCharArray());
+                            }
+                        }
+                        return null;
+                    }
+                });
+
+                log.info("SOCKS5 authentication configured for user: {}", proxyUser);
+            } else {
+                log.info("SOCKS5 proxy configured without authentication");
+            }
+
         } catch (Exception e) {
-            log.error("Failed to patch RuneLite client: ", e);
+            log.error("Failed to configure SOCKS5 proxy: {}", e.getMessage(), e);
         }
     }
 
@@ -280,7 +437,6 @@ public class Launcher {
         return false;
     }
 
-
     /**
      * Polls for the RuneLite ClassLoader until it's available.
      */
@@ -298,64 +454,6 @@ public class Launcher {
             Thread.sleep(Launcher.CLASSLOADER_POLL_INTERVAL_MS);
         }
         throw new InterruptedException("Interrupted while waiting for ClassLoader");
-    }
-
-    /**
-     * Configures network traffic to be relayed through a provided SOCKS5 proxy.
-     * @param proxyString The proxy string in the format ip:port:user:pass
-     */
-    private void configureProxy(String proxyString) {
-        try {
-            String[] parts = proxyString.split(":");
-            if (parts.length != 2 && parts.length != 4) {
-                log.error("Invalid proxy format. Expected IP:PORT or IP:PORT:USER:PASS, got: {}", proxyString);
-                return;
-            }
-
-            String proxyHost = parts[0];
-            String proxyPort = parts[1];
-            String proxyUser = parts.length == 4 ? parts[2] : "";
-            String proxyPass = parts.length == 4 ? parts[3] : "";
-
-            log.info("Configuring SOCKS5 proxy: {}:{}", proxyHost, proxyPort);
-
-            // Set SOCKS proxy (this handles both TCP and UDP traffic)
-            System.setProperty("socksProxyHost", proxyHost);
-            System.setProperty("socksProxyPort", proxyPort);
-            System.setProperty("socksProxyVersion", "5");
-
-            // For SOCKS5, we don't set HTTP/HTTPS proxy properties as they would take precedence
-            // and bypass the SOCKS proxy
-
-            // Configure SOCKS authentication if credentials provided
-            if (!proxyUser.isEmpty() && !proxyPass.isEmpty()) {
-                System.setProperty("java.net.socks.username", proxyUser);
-                System.setProperty("java.net.socks.password", proxyPass);
-
-                // Set up authenticator for SOCKS authentication
-                Authenticator.setDefault(new Authenticator() {
-                    @Override
-                    protected PasswordAuthentication getPasswordAuthentication() {
-                        if (getRequestorType() == RequestorType.PROXY) {
-                            // Check if this is a SOCKS proxy request
-                            String protocol = getRequestingProtocol();
-                            log.info("Requesting proxy protocol: {}", protocol);
-                            if (protocol != null && protocol.toLowerCase().contains("socks")) {
-                                return new PasswordAuthentication(proxyUser, proxyPass.toCharArray());
-                            }
-                        }
-                        return null;
-                    }
-                });
-
-                log.info("SOCKS5 authentication configured for user: {}", proxyUser);
-            } else {
-                log.info("SOCKS5 proxy configured without authentication");
-            }
-
-        } catch (Exception e) {
-            log.error("Failed to configure SOCKS5 proxy: {}", e.getMessage(), e);
-        }
     }
 
     /**
@@ -385,89 +483,5 @@ public class Launcher {
         Method addUrl = URLClassLoader.class.getDeclaredMethod("addURL", URL.class);
         addUrl.setAccessible(true);
         addUrl.invoke(classLoader, url);
-    }
-
-    /**
-     * Starts the launcher with preferences from the GUI
-     */
-    public static void startWithPreferences(LauncherPreferences preferences, boolean configure) {
-        System.setProperty("runelite.launcher.nojvm", "true");
-        System.setProperty("runelite.launcher.reflect", "true");
-
-        // Set proxy system property if specified
-        if (preferences.getProxy() != null && !preferences.getProxy().isEmpty()) {
-            System.setProperty("kraken.proxy", preferences.getProxy());
-            log.info("Proxy configured: {}", preferences.getProxy());
-        }
-
-        Launcher launcher = new Launcher(new BootstrapDownloader());
-
-        // Skip launcher.start() if RuneLite mode is enabled
-        if (!preferences.isRuneliteMode()) {
-            if (!launcher.start(preferences)) {
-                log.info("Kraken Launcher failed to start, see error messages above.");
-                return;
-            }
-        } else {
-            log.info("RuneLite mode enabled - skipping Kraken bootstrap");
-        }
-
-        try {
-            Class<?> launcherClass = Class.forName(LAUNCHER_CLASS);
-            String[] args = new String[]{};
-
-            if(configure) {
-                log.info("Starting Launcher (Configure)");
-                args = new String[]{"--configure"};
-            }
-
-            launcherClass.getMethod("main", String[].class).invoke(null, (Object) args);
-        } catch (Exception e) {
-            log.error("Failed to start RuneLite launcher", e);
-            launcher.shutdown();
-            System.exit(1);
-        }
-
-        Runtime.getRuntime().addShutdownHook(new Thread(launcher::shutdown, "com.kraken.launcher.shutdown"));
-    }
-
-    public static void main(String[] args) {
-        log.info("Starting Kraken Launcher");
-
-        try {
-            Instrumentation inst = getInstrumentation();
-            log.info("ByteBuddy Java Agent, installed successfully {}", inst);
-        } catch (IllegalStateException e) {
-            log.warn("WARN: ByteBuddy Java Agent was not installed.");
-            log.warn("WARN: The JVM was not started with the correct -javaagent argument, or the JAR manifest is missing the Premain-Class. This will not prevent your plugins from working.");
-        }
-
-        try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        } catch (Exception e) {
-            log.warn("Failed to set system look and feel", e);
-        }
-
-        boolean forceShowUI = Arrays.asList(args).contains("--force-ui");
-        boolean configure = Arrays.asList(args).contains("--configure");
-
-        SwingUtilities.invokeLater(() -> {
-            LauncherUI gui = new LauncherUI();
-
-            if(configure) {
-                gui.onStartClicked(true);
-                return;
-            }
-
-            if(forceShowUI) {
-                log.info("Force showing UI, --force-ui arg passed");
-                gui.setVisible(true);
-            } else if(gui.getPreferences().isSkipLauncher()) {
-                log.info("Skipping Kraken Launcher UI and starting RuneLite");
-                gui.onStartClicked(false);
-            } else {
-                gui.setVisible(true);
-            }
-        });
     }
 }
