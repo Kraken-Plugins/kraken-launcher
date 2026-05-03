@@ -32,6 +32,7 @@ public class Utils {
     /**
      * Injects the RuneLite launcher jar file into the system class path. This allows the RuneLite launcher class
      * to be loaded and executed.
+     * @throws Exception thrown when the jar file cannot be found
      */
     public static void injectRuneLiteLauncher() throws Exception {
         try {

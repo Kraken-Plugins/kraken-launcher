@@ -95,7 +95,7 @@ launch4j {
     manifest = "${projectDir}/src/main/resources/app.manifest"
     outfile = 'KrakenInstaller.exe'
     bundledJrePath = 'jre'
-    headerType = 'console' // 'console' if you'd like to see whats happening
+    headerType = 'console'
     stayAlive = true
     errTitle = 'Kraken Launcher Error'
     downloadUrl = 'https://kraken-plugins.com/download'

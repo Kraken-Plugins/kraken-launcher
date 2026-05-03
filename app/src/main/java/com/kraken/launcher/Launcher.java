@@ -53,6 +53,8 @@ public class Launcher {
 
     /**
      * Starts the launcher with preferences from the GUI
+     * @param preferences The preferences to use for the patching process.
+     * @param configure If true, the launcher will start in configure mode.
      */
     public static void startWithPreferences(LauncherPreferences preferences, boolean configure) {
         System.setProperty("runelite.launcher.nojvm", "true");
@@ -149,6 +151,7 @@ public class Launcher {
     /**
      * Starts the hijack process asynchronously by patching
      * the bootstrap and loading the Kraken client plugin.
+     * @param preferences The preferences to use for the patching process.
      */
     public boolean patch(LauncherPreferences preferences) {
         try {
