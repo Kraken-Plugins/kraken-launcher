@@ -18,6 +18,7 @@ import java.util.stream.Collectors;
 public class Installer {
 
     private static final String CONFIG_FILE = Utils.RUNELITE_DIR + File.separator + "config.json";
+    private static final String SETTINGS_FILE = Utils.RUNELITE_DIR + File.separator + "settings.json";
     private static final String TARGET_MAIN_CLASS = "com.kraken.launcher.Launcher";
 
     public static void main(String[] args) {
@@ -195,6 +196,7 @@ public class Installer {
         }
 
         updateConfigJson(jarName);
+        updateSettingsJson();
 
         if (Utils.IS_MAC) {
             if (!fixMacGatekeeper()) {
@@ -204,6 +206,62 @@ public class Installer {
         }
 
         log.info("Kraken Launcher installation completed successfully.");
+    }
+
+    private static void updateSettingsJson() throws IOException {
+        File settingsFile = new File(SETTINGS_FILE);
+        if (!settingsFile.exists()) {
+            log.error("No settings.json file found in the RuneLite dir. Is RuneLite installed?");
+            throw new IOException("settings.json not found in RuneLite directory.");
+        }
+
+        settingsFile.setWritable(true, false);
+
+        Gson gson = new GsonBuilder().setPrettyPrinting().create();
+        JsonObject configObject;
+
+        try (FileReader reader = new FileReader(settingsFile)) {
+            configObject = JsonParser.parseReader(reader).getAsJsonObject();
+        }
+
+        JsonArray clientArgs = configObject.has("clientArguments")
+                ? configObject.getAsJsonArray("clientArguments")
+                : new JsonArray();
+
+        boolean hasInsecure = false;
+        boolean hasTelemetry = false;
+
+        // These args will enable the launcher to have built-in character selection functionality in the future. Currently, you
+        // must re-launch with Jagex's launcher to select a new character. It's also preferable to not send anything off
+        // to RuneLite so we disable telemetry metrics by default.
+        for (JsonElement element : clientArgs) {
+            String arg = element.getAsString();
+            if ("--insecure-write-credentials".equals(arg)) {
+                hasInsecure = true;
+            }
+            if ("--disable-telemetry".equals(arg)) {
+                hasTelemetry = true;
+            }
+        }
+
+        if (!hasInsecure) {
+            clientArgs.add("--insecure-write-credentials");
+        }
+        if (!hasTelemetry) {
+            clientArgs.add("--disable-telemetry");
+        }
+
+        configObject.add("clientArguments", clientArgs);
+
+        String jsonOutput = gson.toJson(configObject);
+
+        try (FileWriter writer = new FileWriter(settingsFile)) {
+            writer.write(jsonOutput);
+        }
+
+        if (!settingsFile.setWritable(false, false)) {
+            log.warn("Failed to lock settings.json. RuneLite might overwrite the client args.");
+        }
     }
 
     private static void updateConfigJson(String jar) throws IOException {
