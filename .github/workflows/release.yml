@@ -1,0 +1,146 @@
+name: Build and Deploy Launcher
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Manual Version Override (Optional)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    environment: Prod
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Determine Version
+        id: version
+        run: |
+          # Define your base version here (Major.Minor)
+          BASE_VERSION="1.0"
+          
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+             # Manual trigger override
+             VERSION="${{ github.event.inputs.version }}"
+          else
+             # Automatic: 1.0. + Build Number (e.g., 1.0.15)
+             VERSION="$BASE_VERSION.${{ github.run_number }}"
+          fi
+          
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version determined: $VERSION"
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v5.2.0
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Fat Jar and Windows Exe
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: ./gradlew shadowJar createExe --no-daemon
+
+      - name: Download Windows JRE
+        run: |
+          JRE_URL="https://api.adoptium.net/v3/binary/latest/11/ga/windows/x64/jre/hotspot/normal/eclipse"
+          
+          echo "Downloading Windows JRE..."
+          wget -O windows-jre.zip "$JRE_URL"
+          
+          echo "Unzipping..."
+          unzip -q windows-jre.zip -d temp_jre
+          
+          # The zip usually contains a root folder like 'jdk-11.0.18+10-jre', find it and move contents
+          JRE_ROOT=$(ls temp_jre | head -n 1)
+          mv "temp_jre/$JRE_ROOT" jre-windows
+          
+          rm windows-jre.zip
+          rm -rf temp_jre
+          
+      - name: Create Distribution Bundle
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          EXE_FILE="app/build/launch4j/KrakenInstaller.exe"
+          
+          # Create a staging directory
+          mkdir -p dist/KrakenLauncher
+          
+          # Copy the Exe
+          cp "$EXE_FILE" dist/KrakenLauncher/
+          
+          # Copy the JRE folder into the staging directory named 'jre'
+          # This matches 'bundledJrePath = jre' in your gradle file
+          cp -r jre-windows dist/KrakenLauncher/jre
+          
+          # Zip it all up
+          cd dist
+          zip -r "KrakenLauncher-v$VERSION-Windows.zip" KrakenLauncher
+          
+          echo "DIST_FILE=dist/KrakenLauncher-v$VERSION-Windows.zip" >> $GITHUB_ENV
+
+      - name: Create and Push Git Tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          TAG_NAME="v${{ steps.version.outputs.VERSION }}"
+          
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists."
+          else
+            git tag -a "$TAG_NAME" -m "Release ${{ steps.version.outputs.VERSION }}"
+            git push origin "$TAG_NAME"
+            echo "Created and pushed tag: $TAG_NAME"
+          fi
+
+      - name: Install MinIO Client
+        run: |
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /tmp/mc
+          chmod +x /tmp/mc
+          sudo mv /tmp/mc /usr/local/bin/mc
+          mc --version
+
+      - name: Configure MinIO Client
+        run: |
+          mc alias set s3 ${{ secrets.MINIO_URL }} ${{ secrets.MINIO_ACCESS_KEY }} ${{ secrets.MINIO_SECRET_KEY }}
+
+      - name: Upload to MinIO
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          JAR_FILE=$(find app/build/libs -name "*-fat.jar" | head -n 1)          
+          echo "Processing Version: $VERSION"
+          
+          mc cp "${{ env.DIST_FILE }}" "s3/kraken-bootstrap-static/KrakenLauncher-Windows.zip"
+          mc cp "$JAR_FILE" "s3/kraken-bootstrap-static/KrakenSetup.jar"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/launch4j/KrakenInstaller.exe
+            app/build/libs/*-fat.jar
+          # IMPORTANT: We use the calculated version for the tag, not the branch name
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: Release ${{ steps.version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
