@@ -228,25 +228,17 @@ public class Installer {
                 ? configObject.getAsJsonArray("clientArguments")
                 : new JsonArray();
 
-        boolean hasInsecure = false;
         boolean hasTelemetry = false;
 
-        // These args will enable the launcher to have built-in character selection functionality in the future. Currently, you
-        // must re-launch with Jagex's launcher to select a new character. It's also preferable to not send anything off
+        // It's preferable to not send anything off
         // to RuneLite so we disable telemetry metrics by default.
         for (JsonElement element : clientArgs) {
             String arg = element.getAsString();
-            if ("--insecure-write-credentials".equals(arg)) {
-                hasInsecure = true;
-            }
             if ("--disable-telemetry".equals(arg)) {
                 hasTelemetry = true;
             }
         }
 
-        if (!hasInsecure) {
-            clientArgs.add("--insecure-write-credentials");
-        }
         if (!hasTelemetry) {
             clientArgs.add("--disable-telemetry");
         }
@@ -292,6 +284,9 @@ public class Installer {
                 ? configObject.getAsJsonArray("vmArgs")
                 : new JsonArray();
 
+        // TODO Java agents are detectable in any capacity removing the ability for Runtime client patches.
+        // Patches need to be applied by an external process before the jar is invoked i.e. this launcher needs to
+        // apply any patches rather than the API.
         JsonArray updatedVmArgs = new JsonArray();
         updatedVmArgs.add("-javaagent:" + jar);
 
