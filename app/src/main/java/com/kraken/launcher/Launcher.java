@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.bytebuddy.agent.ByteBuddyAgent;
 
 import javax.swing.*;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.instrument.Instrumentation;
@@ -152,6 +153,7 @@ public class Launcher {
      * Starts the hijack process asynchronously by patching
      * the bootstrap and loading the Kraken client plugin.
      * @param preferences The preferences to use for the patching process.
+     * @return boolean True if the patching process was successful, false otherwise.
      */
     public boolean patch(LauncherPreferences preferences) {
         try {
@@ -243,70 +245,44 @@ public class Launcher {
             }
 
             URLClassLoader urlClassLoader = (URLClassLoader) classLoader;
-
-            addUrlToClassLoader(urlClassLoader, resolveJarUrl());
-
-            // Enables Launcher to be run via IDE instead of Jagex launcher for testing.
-            addUrlToClassLoader(urlClassLoader, ClientWatcher.class.getProtectionDomain().getCodeSource().getLocation());
+            extractAndInjectBootstrap(urlClassLoader);
 
             for(Artifact artifact : bootstrapDownloader.getKrakenBootstrap().getArtifacts()) {
-                log.debug("Adding JAR to RuneLite classpath: {}", artifact.getName());
-                addUrlToClassLoader(urlClassLoader, new URL(artifact.getPath()));
+                String artifactName = artifact.getName().toLowerCase();
 
-                if(artifact.getName().toLowerCase().startsWith("kraken-client-")) {
-                    // Parse version from kraken-client
-                    System.setProperty("kraken-client-version", parseVersion(artifact.getName().toLowerCase(), "kraken-client-"));
+                if(artifactName.startsWith("kraken-client-")) {
+                    System.setProperty("kraken-client-version", parseVersion(artifactName, "kraken-client-"));
                 }
-
-                if(artifact.getName().toLowerCase().startsWith("kraken-api-")) {
-                    System.setProperty("kraken-api-version", parseVersion(artifact.getName().toLowerCase(),  "kraken-api-"));
+                if(artifactName.startsWith("kraken-api-")) {
+                    System.setProperty("kraken-api-version", parseVersion(artifactName,  "kraken-api-"));
                 }
             }
-
-            // Wait for the RuneLite injector to be created by Guice.
-            // Once created it can be used to load the Kraken Client plugin
-            new Thread(() -> {
-                try {
-                    Class<?> runeLiteClass = classLoader.loadClass("net.runelite.client.RuneLite");
-                    Method getInjectorMethod = runeLiteClass.getDeclaredMethod("getInjector");
-
-                    Object injector = null;
-                    while (injector == null) {
-                        injector = getInjectorMethod.invoke(null);
-                        if (injector == null) {
-                            try {
-                                Thread.sleep(25);
-                            } catch (InterruptedException ex) {
-                                Thread.currentThread().interrupt();
-                                return;
-                            }
-                        }
-                    }
-
-                    Class<?> watcherClass = classLoader.loadClass("com.kraken.launcher.ClientWatcher");
-                    Class<?> krakenPluginMainClass = classLoader.loadClass("com.krakenclient.KrakenLoaderPlugin");
-
-                    // Load the Injector INTERFACE to avoid IllegalAccessException on the internal Impl class
-                    Class<?> injectorInterface = classLoader.loadClass("com.google.inject.Injector");
-                    Method getInstanceMethod = injectorInterface.getMethod("getInstance", Class.class);
-                    Object watcherInstance = getInstanceMethod.invoke(injector, watcherClass);
-
-
-                    // Start the watcher
-                    Method startMethod = watcherClass.getMethod("start", Class.class);
-                    startMethod.invoke(watcherInstance, krakenPluginMainClass);
-                    log.info("Kraken Client injected successfully.");
-                } catch (ClassNotFoundException e) {
-                    log.error("Class not found during injection (Check classpath/bootstrap): ", e);
-                } catch (Exception e) {
-                    log.error("Reflection error during injection: ", e);
-                }
-            }).start();
-        } catch (InterruptedException e) {
-            log.warn("Client patching process interrupted: ", e);
-            Thread.currentThread().interrupt();
-        } catch (Throwable e) {
+            log.info("Patched classloader with Kraken Bootstrap plugin.");
+        } catch (Exception e) {
             log.error("CRITICAL: failed to patch RuneLite client: ", e);
+        }
+    }
+
+    /**
+     * Extracts the embedded Bootstrap JAR from the Launcher's resources and
+     * appends it to RuneLite's URLClassLoader.
+     */
+    private void extractAndInjectBootstrap(URLClassLoader urlClassLoader) throws Exception {
+        // Read the literal .jar file from inside our fat jar
+        try (InputStream is = Launcher.class.getResourceAsStream("/kraken-bootstrap.dat")) {
+            if (is == null) {
+                throw new IllegalStateException("Embedded kraken-bootstrap.jar not found in Launcher resources!");
+            }
+
+            // Write it to the local OS temp directory
+            File tempBootstrap = File.createTempFile("kraken-bootstrap-", ".jar");
+            tempBootstrap.deleteOnExit(); // Clean up when the JVM dies
+
+            java.nio.file.Files.copy(is, tempBootstrap.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+
+            // Inject the clean, isolated JAR URL into RuneLite
+            addUrlToClassLoader(urlClassLoader, tempBootstrap.toURI().toURL());
+            log.info("Extracted and injected isolated Kraken Bootstrap JAR.");
         }
     }
 

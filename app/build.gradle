@@ -22,6 +22,14 @@ repositories {
     mavenLocal()
 }
 
+sourceSets {
+    bootstrap {
+        java {
+            srcDirs = ['src/bootstrap/java']
+        }
+    }
+}
+
 dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
     compileOnly 'org.projectlombok:lombok:1.18.30'
@@ -40,6 +48,11 @@ dependencies {
     testImplementation 'junit:junit:4.12'
     testImplementation group: 'net.runelite', name:'client', version: runeLiteVersion
     testImplementation group: 'net.runelite', name:'jshell', version: runeLiteVersion
+
+    bootstrapCompileOnly 'org.projectlombok:lombok:1.18.30'
+    bootstrapAnnotationProcessor 'org.projectlombok:lombok:1.18.30'
+    bootstrapCompileOnly group: 'net.runelite', name:'client', version: runeLiteVersion
+    bootstrapCompileOnly 'org.slf4j:slf4j-api:1.7.36'
 }
 
 processResources {
@@ -48,6 +61,13 @@ processResources {
     filesMatching("kraken-version.properties") {
         expand(version: projectVersion)
     }
+}
+
+task bootstrapJar(type: Jar) {
+    archiveBaseName = 'kraken-bootstrap'
+    archiveVersion = ''
+    archiveExtension = 'dat' //  This prevents Shadow from unpacking it this as it will aggressively unpack jar files into the root dir.
+    from sourceSets.bootstrap.output
 }
 
 testing {
@@ -72,6 +92,8 @@ jar {
 }
 
 shadowJar {
+    dependsOn bootstrapJar
+
     archiveBaseName = 'kraken-launcher'
     archiveVersion = projectVersion
     archiveClassifier = 'fat'
@@ -84,6 +106,12 @@ shadowJar {
                 'Can-Retransform-Classes': 'true',
                 'Can-Redefine-Classes': 'true'
         )
+    }
+
+    // Copy the resulting kraken-bootstrap.jar directly into the root directory
+    // of the fat kraken-launcher.jar
+    from(bootstrapJar.archiveFile) {
+        into '/'
     }
 }
 

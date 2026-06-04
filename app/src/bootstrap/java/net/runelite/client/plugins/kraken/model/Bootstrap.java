@@ -1,4 +1,4 @@
-package com.kraken.launcher.bootstrap.model;
+package net.runelite.client.plugins.kraken.model;
 
 import lombok.Data;
 import lombok.NoArgsConstructor;
