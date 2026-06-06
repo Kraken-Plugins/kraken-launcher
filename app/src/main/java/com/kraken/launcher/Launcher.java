@@ -51,6 +51,54 @@ public class Launcher {
         });
     }
 
+    public static void main(String[] args) {
+        log.info("Starting Kraken Launcher");
+
+        try {
+            Instrumentation inst = getInstrumentation();
+            log.info("ByteBuddy Java Agent, installed successfully {}", inst);
+        } catch (IllegalStateException e) {
+            // When running directly via IDE, this installs into the current jvm without the need
+            // for extra VM Args like "-javaagent:JarFileWithByteBuddyAgent.jar"
+            try {
+                ByteBuddyAgent.install();
+                log.info("ByteBuddy Java Agent, installed successfully {}", getInstrumentation());
+            } catch (IllegalStateException ex) {
+                log.warn("ByteBuddy Java Agent was not installed. The JVM was not started with the correct -javaagent argument, or the JAR manifest is missing the Premain-Class. " +
+                        "Kraken dependency injection will be unavailable until the launcher is started with instrumentation.");
+            }
+        }
+
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception e) {
+            log.warn("Failed to set system look and feel: ", e);
+        }
+
+        boolean forceShowUI = Arrays.asList(args).contains("--force-ui");
+        boolean configure = Arrays.asList(args).contains("--configure");
+
+        SwingUtilities.invokeLater(() -> {
+            LauncherUI gui = new LauncherUI();
+
+            if(configure) {
+                gui.onStartClicked(true);
+                return;
+            }
+
+            if(forceShowUI) {
+                log.info("Force showing UI, --force-ui arg passed");
+                gui.setVisible(true);
+            } else if(gui.getPreferences().isSkipLauncher()) {
+                log.info("Skipping Kraken Launcher UI and starting RuneLite");
+                gui.onStartClicked(false);
+            } else {
+                gui.setVisible(true);
+            }
+        });
+    }
+
+
     /**
      * Starts the launcher with preferences from the GUI
      * @param preferences The preferences to use for the patching process.
@@ -101,57 +149,11 @@ public class Launcher {
         Runtime.getRuntime().addShutdownHook(new Thread(launcher::shutdown, "com.kraken.launcher.shutdown"));
     }
 
-    public static void main(String[] args) {
-        log.info("Starting Kraken Launcher");
-
-        try {
-            Instrumentation inst = getInstrumentation();
-            log.info("ByteBuddy Java Agent, installed successfully {}", inst);
-        } catch (IllegalStateException e) {
-            // When running directly via IDE, this installs into the current jvm without the need
-            // for extra VM Args like "-javaagent:JarFileWithByteBuddyAgent.jar"
-            try {
-                ByteBuddyAgent.install();
-                log.info("ByteBuddy Java Agent, installed successfully {}", getInstrumentation());
-            } catch (IllegalStateException ex) {
-                log.warn("ByteBuddy Java Agent was not installed. The JVM was not started with the correct -javaagent argument, or the JAR manifest is missing the Premain-Class. " +
-                        "Kraken dependency injection will be unavailable until the launcher is started with instrumentation.");
-            }
-        }
-
-        try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        } catch (Exception e) {
-            log.warn("Failed to set system look and feel: ", e);
-        }
-
-        boolean forceShowUI = Arrays.asList(args).contains("--force-ui");
-        boolean configure = Arrays.asList(args).contains("--configure");
-
-        SwingUtilities.invokeLater(() -> {
-            LauncherUI gui = new LauncherUI();
-
-            if(configure) {
-                gui.onStartClicked(true);
-                return;
-            }
-
-            if(forceShowUI) {
-                log.info("Force showing UI, --force-ui arg passed");
-                gui.setVisible(true);
-            } else if(gui.getPreferences().isSkipLauncher()) {
-                log.info("Skipping Kraken Launcher UI and starting RuneLite");
-                gui.onStartClicked(false);
-            } else {
-                gui.setVisible(true);
-            }
-        });
-    }
-
     /**
      * Starts the hijack process asynchronously by patching
      * the bootstrap and loading the Kraken client plugin.
      * @param preferences The preferences to use for the patching process.
+     * @return True if the patching process was successful, false otherwise.
      */
     public boolean patch(LauncherPreferences preferences) {
         try {
@@ -188,7 +190,7 @@ public class Launcher {
         }
 
         log.info("Kraken bootstrap verified, starting client patching process.");
-        executorService.execute(() -> patchLauncher(preferences));
+        executorService.execute(() -> injectDependencies(preferences));
         return true;
     }
 
@@ -229,7 +231,7 @@ public class Launcher {
      * Prepares the parent/system loader with the launcher and Kraken artifacts so RuneLite can resolve them
      * without reflectively mutating RuneLite's own class loader.
      */
-    private void patchLauncher(LauncherPreferences preferences) {
+    private void injectDependencies(LauncherPreferences preferences) {
         if(!preferences.getProxy().isEmpty()) {
             configureProxy(preferences.getProxy());
         }
@@ -243,7 +245,6 @@ public class Launcher {
             }
 
             URLClassLoader urlClassLoader = (URLClassLoader) classLoader;
-
             addUrlToClassLoader(urlClassLoader, resolveJarUrl());
 
             // Enables Launcher to be run via IDE instead of Jagex launcher for testing.
@@ -254,7 +255,6 @@ public class Launcher {
                 addUrlToClassLoader(urlClassLoader, new URL(artifact.getPath()));
 
                 if(artifact.getName().toLowerCase().startsWith("kraken-client-")) {
-                    // Parse version from kraken-client
                     System.setProperty("kraken-client-version", parseVersion(artifact.getName().toLowerCase(), "kraken-client-"));
                 }
 
@@ -263,8 +263,8 @@ public class Launcher {
                 }
             }
 
-            // Wait for the RuneLite injector to be created by Guice.
-            // Once created it can be used to load the Kraken Client plugin
+//          Wait for the RuneLite injector to be created by Guice.
+//          Once created it can be used to load the Kraken Client plugin
             new Thread(() -> {
                 try {
                     Class<?> runeLiteClass = classLoader.loadClass("net.runelite.client.RuneLite");
@@ -284,13 +284,12 @@ public class Launcher {
                     }
 
                     Class<?> watcherClass = classLoader.loadClass("com.kraken.launcher.ClientWatcher");
-                    Class<?> krakenPluginMainClass = classLoader.loadClass("com.krakenclient.KrakenLoaderPlugin");
+                    Class<?> krakenPluginMainClass = classLoader.loadClass("net.runelite.client.plugins.kraken.KrakenLoaderPlugin");
 
                     // Load the Injector INTERFACE to avoid IllegalAccessException on the internal Impl class
                     Class<?> injectorInterface = classLoader.loadClass("com.google.inject.Injector");
                     Method getInstanceMethod = injectorInterface.getMethod("getInstance", Class.class);
                     Object watcherInstance = getInstanceMethod.invoke(injector, watcherClass);
-
 
                     // Start the watcher
                     Method startMethod = watcherClass.getMethod("start", Class.class);

@@ -31,6 +31,20 @@ public class ClientWatcher {
         }
     }
 
+    /**
+     * Starts the ClientWatcher process, which waits for the RuneLite splash screen to close before
+     * initializing and starting the Kraken loader plugin. This method ensures that plugin loading
+     * and initialization happens on the Event Dispatch Thread (EDT) to prevent concurrency issues.
+     * This method is called reflectively from Launcher.java
+     *
+     * <p>During the splash screen wait period, the thread sleeps for a fixed interval. Once the
+     * splash screen closes, the Kraken loader plugin is loaded, enabled, and started using the
+     * provided {@link PluginManager}. If the plugin has already been auto-started by RuneLite, it
+     * is stopped and restarted to prevent inconsistent states.
+     *
+     * @param krakenLoaderPlugin The {@link Class} object representing the Kraken loader plugin to be
+     *                           loaded and started. This must not be {@code null}.
+     */
     public void start(Class<?> krakenLoaderPlugin) {
         eventBus.register(this);
         log.info("Starting Client Watcher...");
