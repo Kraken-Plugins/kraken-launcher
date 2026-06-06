@@ -1,11 +1,12 @@
 package com.kraken.launcher.bootstrap;
 
+import com.google.common.hash.Hashing;
+import com.google.common.hash.HashingOutputStream;
 import com.google.gson.Gson;
 import com.kraken.launcher.bootstrap.model.Artifact;
 import com.kraken.launcher.bootstrap.model.Bootstrap;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.client.RuneLite;
 
 import javax.inject.Singleton;
 import java.io.BufferedInputStream;
@@ -20,14 +21,12 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.security.MessageDigest;
 import java.time.Duration;
-import java.util.Locale;
 
 @Slf4j
 @Singleton
 public class BootstrapDownloader {
-    private static final String KRAKEN_BOOTSTRAP = "https://minio.kraken-plugins.com/kraken-bootstrap-static/bootstrap.json";
+    private static final String KRAKEN_BOOTSTRAP_BASE = "https://minio.kraken-plugins.com/kraken-bootstrap-static/";
     private static final String RUNELITE_BOOTSTRAP = "https://static.runelite.net/bootstrap.json";
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private final Gson gson = new Gson();
@@ -37,6 +36,12 @@ public class BootstrapDownloader {
 
     @Getter
     private Bootstrap runeliteBootstrap = null;
+
+    private final String krakenBootstrapUrl;
+
+    public BootstrapDownloader(boolean qa) {
+        this.krakenBootstrapUrl = qa ? KRAKEN_BOOTSTRAP_BASE + "bootstrap-qa.json" : KRAKEN_BOOTSTRAP_BASE + "bootstrap.json";
+    }
 
     /**
      * Downloads the bootstrap file from the server or returns it if cached in memory.
@@ -51,8 +56,8 @@ public class BootstrapDownloader {
     }
 
     public void downloadKrakenBootstrap() throws IOException {
-        log.info("Downloading Kraken Bootstrap from URL: {}", KRAKEN_BOOTSTRAP);
-        krakenBootstrap = downloadBootstrap(KRAKEN_BOOTSTRAP, krakenBootstrap);
+        log.info("Downloading Kraken Bootstrap from URL: {}", this.krakenBootstrapUrl);
+        krakenBootstrap = downloadBootstrap(this.krakenBootstrapUrl, krakenBootstrap);
     }
 
     public void downloadRuneLiteBootstrap() throws IOException {
@@ -74,58 +79,43 @@ public class BootstrapDownloader {
         }
     }
 
-    private String normalizeHash(String hash) {
-        if (hash == null) {
-            return null;
+    private String computeHash(File file) throws IOException {
+        try (InputStream in = new BufferedInputStream(new java.io.FileInputStream(file));
+             HashingOutputStream hout = new HashingOutputStream(Hashing.sha256(), java.io.OutputStream.nullOutputStream())) {
+            in.transferTo(hout);
+            return hout.hash().toString();
         }
-
-        String normalized = hash.trim().toLowerCase(Locale.ROOT);
-        return normalized.isEmpty() ? null : normalized;
     }
 
-    private String sha256(Path path) throws Exception {
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+    public File cacheArtifact(Artifact artifact) throws Exception {
+        File cacheDir = new File(System.getProperty("user.home"), ".runelite").toPath()
+                .resolve("kraken")
+                .resolve("repository2")
+                .toFile();
 
-        try (InputStream in = new BufferedInputStream(Files.newInputStream(path))) {
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                digest.update(buffer, 0, read);
-            }
-        }
-
-        byte[] hash = digest.digest();
-        StringBuilder hex = new StringBuilder(hash.length * 2);
-        for (byte b : hash) {
-            hex.append(String.format("%02x", b));
-        }
-        return hex.toString();
-    }
-
-
-    private File cacheArtifact(Artifact artifact) throws Exception {
-        File cacheDir = RuneLite.RUNELITE_DIR.toPath().resolve("kraken").resolve("repository2").toFile();
-        File runeliteDir = new File(System.getProperty("user.home"), ".runelite").toPath().resolve("repository2").toFile();
         if (!cacheDir.exists() && !cacheDir.mkdirs()) {
             throw new IOException("Unable to create Kraken cache directory: " + cacheDir.getAbsolutePath());
         }
 
-        File localFile = new File(cacheDir, artifact.getName());
-        String expectedHash = normalizeHash(artifact.getHash());
-        if (expectedHash == null) {
-            throw new IOException("Bootstrap hash missing for artifact " + artifact.getName());
+        String expectedHash = artifact.getHash();
+        if (expectedHash == null || expectedHash.isBlank()) {
+            throw new IOException("Bootstrap hash missing for artifact: " + artifact.getName());
         }
 
+        File localFile = new File(cacheDir, artifact.getName());
+
         if (localFile.exists()) {
-            String localHash = sha256(localFile.toPath());
+            String localHash = computeHash(localFile);
             if (expectedHash.equals(localHash)) {
+                log.info("Cache hit for artifact: {}", artifact.getName());
                 return localFile;
             }
-
-            log.warn("Cached artifact {} failed SHA-256 verification. Expected {}, found {}. Re-downloading.", artifact.getName(), expectedHash, localHash);
+            log.warn("Cached artifact {} failed SHA-256 verification. Expected {}, found {}. Re-downloading.",
+                    artifact.getName(), expectedHash, localHash);
             Files.delete(localFile.toPath());
         }
 
+        // Cache miss — download, verify, then atomically move into place
         log.info("Downloading artifact to local cache: {}", artifact.getName());
         Path tempFile = Files.createTempFile(cacheDir.toPath(), artifact.getName() + "-", ".part");
         try {
@@ -134,9 +124,10 @@ public class BootstrapDownloader {
                 Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
             }
 
-            String downloadedHash = sha256(tempFile);
+            String downloadedHash = computeHash(tempFile.toFile());
             if (!expectedHash.equals(downloadedHash)) {
-                throw new IOException("SHA-256 verification failed for " + artifact.getName() + ". Expected " + expectedHash + " but downloaded " + downloadedHash);
+                throw new IOException("SHA-256 verification failed for " + artifact.getName()
+                        + ". Expected " + expectedHash + " but got " + downloadedHash);
             }
 
             Files.move(tempFile, localFile.toPath(), StandardCopyOption.REPLACE_EXISTING);

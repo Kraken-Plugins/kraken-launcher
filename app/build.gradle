@@ -24,8 +24,7 @@ repositories {
 
 dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
-    compileOnly 'org.projectlombok:lombok:1.18.30'
-    annotationProcessor 'org.projectlombok:lombok:1.18.30'
+    implementation("com.google.guava:guava:31.1-jre")
 
     // Required since these need to use system classloader so they can't be included
     // dynamically in the bootstrap.
@@ -36,7 +35,10 @@ dependencies {
     implementation("org.slf4j:slf4j-simple:1.7.36")
     implementation 'ch.qos.logback:logback-classic:1.2.12'
 
+    compileOnly 'org.projectlombok:lombok:1.18.30'
+    annotationProcessor 'org.projectlombok:lombok:1.18.30'
     compileOnly group: 'net.runelite', name:'client', version: runeLiteVersion
+
     testImplementation 'junit:junit:4.12'
     testImplementation group: 'net.runelite', name:'client', version: runeLiteVersion
     testImplementation group: 'net.runelite', name:'jshell', version: runeLiteVersion

@@ -33,7 +33,7 @@ public class LauncherUI extends JFrame {
     private JTextField proxyTextField;
     private final Gson gson;
 
-    public LauncherUI() {
+    public LauncherUI(boolean qaBootstrap) {
         this.gson = new GsonBuilder().setPrettyPrinting().create();
         this.preferences = loadPreferences();
 
@@ -41,14 +41,14 @@ public class LauncherUI extends JFrame {
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setResizable(false);
 
-        initComponents();
+        initComponents(qaBootstrap);
         loadPreferencesToUI();
 
         pack();
         setLocationRelativeTo(null);
     }
 
-    private void initComponents() {
+    private void initComponents(boolean qaBootstrap) {
         JPanel mainPanel = new JPanel();
         mainPanel.setLayout(new BorderLayout(0, 0));
         mainPanel.setBackground(DARK_BG);
@@ -153,7 +153,7 @@ public class LauncherUI extends JFrame {
         JButton cancelButton = createStyledButton("Cancel", new Color(80, 80, 80));
 
         // If the UI is showing then users did not launch in Configure mode
-        startButton.addActionListener(e -> onStartClicked(false));
+        startButton.addActionListener(e -> onStartClicked(false, qaBootstrap));
         cancelButton.addActionListener(e -> onCancelClicked());
 
         buttonsPanel.add(startButton);
@@ -201,7 +201,7 @@ public class LauncherUI extends JFrame {
         return button;
     }
 
-    public void onStartClicked(boolean configure) {
+    public void onStartClicked(boolean configure, boolean qa) {
         log.info("Starting RuneLite launcher");
         preferences.setRuneliteMode(runeliteModeCheckbox.isSelected());
         preferences.setSkipUpdateCheck(skipUpdateCheckbox.isSelected());
@@ -213,7 +213,7 @@ public class LauncherUI extends JFrame {
 
         new Thread(() -> {
             try {
-                Launcher.startWithPreferences(preferences, configure);
+                Launcher.startWithPreferences(preferences, configure, qa);
             } catch (Exception e) {
                 log.error("Failed to start launcher", e);
                 SwingUtilities.invokeLater(() -> {

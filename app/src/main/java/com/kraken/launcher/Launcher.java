@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import net.bytebuddy.agent.ByteBuddyAgent;
 
 import javax.swing.*;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.instrument.Instrumentation;
@@ -77,12 +78,13 @@ public class Launcher {
 
         boolean forceShowUI = Arrays.asList(args).contains("--force-ui");
         boolean configure = Arrays.asList(args).contains("--configure");
+        boolean qaBootstrap = Arrays.asList(args).contains("--qa");
 
         SwingUtilities.invokeLater(() -> {
-            LauncherUI gui = new LauncherUI();
+            LauncherUI gui = new LauncherUI(qaBootstrap);
 
             if(configure) {
-                gui.onStartClicked(true);
+                gui.onStartClicked(true, qaBootstrap);
                 return;
             }
 
@@ -91,7 +93,7 @@ public class Launcher {
                 gui.setVisible(true);
             } else if(gui.getPreferences().isSkipLauncher()) {
                 log.info("Skipping Kraken Launcher UI and starting RuneLite");
-                gui.onStartClicked(false);
+                gui.onStartClicked(false, qaBootstrap);
             } else {
                 gui.setVisible(true);
             }
@@ -104,7 +106,7 @@ public class Launcher {
      * @param preferences The preferences to use for the patching process.
      * @param configure If true, the launcher will start in configure mode.
      */
-    public static void startWithPreferences(LauncherPreferences preferences, boolean configure) {
+    public static void startWithPreferences(LauncherPreferences preferences, boolean configure, boolean qa) {
         System.setProperty("runelite.launcher.nojvm", "true");
         System.setProperty("runelite.launcher.reflect", "true");
 
@@ -114,7 +116,7 @@ public class Launcher {
             log.info("Proxy configured: {}", preferences.getProxy());
         }
 
-        Launcher launcher = new Launcher(new BootstrapDownloader());
+        Launcher launcher = new Launcher(new BootstrapDownloader(qa));
 
         // Skip launcher.start() if RuneLite mode is enabled
         if (preferences.isRuneliteMode()) {
@@ -250,16 +252,29 @@ public class Launcher {
             // Enables Launcher to be run via IDE instead of Jagex launcher for testing.
             addUrlToClassLoader(urlClassLoader, ClientWatcher.class.getProtectionDomain().getCodeSource().getLocation());
 
-            for(Artifact artifact : bootstrapDownloader.getKrakenBootstrap().getArtifacts()) {
+            for (Artifact artifact : bootstrapDownloader.getKrakenBootstrap().getArtifacts()) {
                 log.debug("Adding JAR to RuneLite classpath: {}", artifact.getName());
-                addUrlToClassLoader(urlClassLoader, new URL(artifact.getPath()));
 
-                if(artifact.getName().toLowerCase().startsWith("kraken-client-")) {
+                // Don't cache the Kraken client or api. They change often, and the bootstrap should remain the source
+                // of truth for them
+                if (artifact.getName().toLowerCase().startsWith("kraken-client-")) {
                     System.setProperty("kraken-client-version", parseVersion(artifact.getName().toLowerCase(), "kraken-client-"));
+                    addUrlToClassLoader(urlClassLoader, new URL(artifact.getPath()));
+                    continue;
                 }
 
-                if(artifact.getName().toLowerCase().startsWith("kraken-api-")) {
-                    System.setProperty("kraken-api-version", parseVersion(artifact.getName().toLowerCase(),  "kraken-api-"));
+                if (artifact.getName().toLowerCase().startsWith("kraken-api-")) {
+                    System.setProperty("kraken-api-version", parseVersion(artifact.getName().toLowerCase(), "kraken-api-"));
+                    addUrlToClassLoader(urlClassLoader, new URL(artifact.getPath()));
+                    continue;
+                }
+
+                try {
+                    File cachedArtifact = bootstrapDownloader.cacheArtifact(artifact);
+                    addUrlToClassLoader(urlClassLoader, cachedArtifact.toURI().toURL());
+                } catch (Exception e) {
+                    log.info("No cached artifact {}, falling back to remote URL: {}", artifact.getName(), e.getMessage());
+                    addUrlToClassLoader(urlClassLoader, new URL(artifact.getPath()));
                 }
             }
 
