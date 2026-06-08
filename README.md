@@ -25,7 +25,8 @@ Kraken Launcher is a custom bootstrap loader designed to wrap and modify the off
 
 This repository now also includes a local installer path that rewrites RuneLite's `config.json`, adds the launcher JAR to RuneLite's classpath, and starts the Kraken plugin through RuneLite's plugin system.
 
-> ⚠️ Disclaimer: This software injects the Kraken Client plugin and modifies RuneLite's classpath at runtime. Use at your own risk. The developers are not responsible for account bans or client instability caused by RuneLite updates.
+> ⚠️ Disclaimer: This software injects the Kraken Client plugin and modifies RuneLite's classpath at runtime. 
+> Use at your own risk. The developers are not responsible for account bans or client instability caused by RuneLite updates.
 
 ## Features
 
@@ -66,9 +67,18 @@ If you downloaded a release bundle or renamed the jar to match the published art
 java -jar KrakenSetup.jar
 ```
 
+To run the installer in QA mode which uses a beta build of the Kraken client pass the `--qa` flag to the executable:
+
+```shell
+./RuneLite.exe --qa
+```
+
 ### Automatic install
 
-The installer copies the launcher JAR into RuneLite's resources directory and updates `config.json` so RuneLite starts `com.kraken.launcher.Launcher` instead of the default launcher.
+The installer copies the launcher JAR into RuneLite's resources directory and updates `config.json` so RuneLite starts `com.kraken.launcher.Launcher`
+instead of the default launcher. This also adds a `-javaagent:` entry to the JVM args so that runtime bytecode modifications can be made to the client.
+
+> :warning: Note, attached java agent information is sent over the network to OSRS servers to on login. 
 
 ### Manual local install
 
