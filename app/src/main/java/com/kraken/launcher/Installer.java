@@ -222,6 +222,14 @@ public class Installer {
 
         try (FileReader reader = new FileReader(settingsFile)) {
             configObject = JsonParser.parseReader(reader).getAsJsonObject();
+        } catch (IllegalStateException e) {
+            log.error("Settings file exists but is empty or contains invalid json. Skipping telemetry arg disable.");
+            return;
+        }
+
+        if(configObject == null) {
+            log.error("Settings file contains invalid json. Skipping telemetry arg disable.");
+            return;
         }
 
         JsonArray clientArgs = configObject.has("clientArguments")
