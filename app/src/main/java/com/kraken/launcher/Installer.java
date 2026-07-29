@@ -211,8 +211,8 @@ public class Installer {
     private static void updateSettingsJson() throws IOException {
         File settingsFile = new File(SETTINGS_FILE);
         if (!settingsFile.exists()) {
-            log.error("No settings.json file found in the RuneLite dir. Is RuneLite installed?");
-            throw new IOException("settings.json not found in RuneLite directory.");
+           log.warn("No settings.json file found in the RuneLite dir. No --disable-telemetry arg will be set. Install ok.");
+           return;
         }
 
         settingsFile.setWritable(true, false);
