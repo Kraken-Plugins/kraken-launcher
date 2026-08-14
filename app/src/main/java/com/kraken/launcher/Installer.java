@@ -292,15 +292,14 @@ public class Installer {
                 ? configObject.getAsJsonArray("vmArgs")
                 : new JsonArray();
 
-        // TODO Java agents are detectable in any capacity removing the ability for Runtime client patches.
-        // Patches need to be applied by an external process before the jar is invoked i.e. this launcher needs to
-        // apply any patches rather than the API.
+        // Java agents are detectable by Jagex in the login packet. Patches must be applied by this java agent at runtime
+        // in order to avoid the agent being sent in login packets.
         JsonArray updatedVmArgs = new JsonArray();
         updatedVmArgs.add("-javaagent:" + jar);
 
-        java.util.List<String> macRequiredArgs = Arrays.asList(
-                "--add-opens=java.desktop/com.apple.eawt=ALL-UNNAMED",
-                "--add-exports=java.desktop/com.apple.eawt=ALL-UNNAMED",
+        // java.base is strongly encapsulated from Java 16 onwards. Without these the launcher cannot
+        // reflectively add the Kraken artifacts to RuneLite's URLClassLoader and the client fails to start.
+        java.util.List<String> requiredVmArgs = Arrays.asList(
                 "--add-opens=java.base/java.net=ALL-UNNAMED",
                 "--add-exports=java.base/java.net=ALL-UNNAMED",
                 "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
@@ -311,6 +310,15 @@ public class Installer {
                 "--add-exports=java.base/jdk.internal.reflect=ALL-UNNAMED"
         );
 
+        java.util.List<String> macRequiredArgs = Arrays.asList(
+                "--add-opens=java.desktop/com.apple.eawt=ALL-UNNAMED",
+                "--add-exports=java.desktop/com.apple.eawt=ALL-UNNAMED"
+        );
+
+        for (String requiredArg : requiredVmArgs) {
+            updatedVmArgs.add(requiredArg);
+        }
+
         if (Utils.IS_MAC) {
             for (String macArg : macRequiredArgs) {
                 updatedVmArgs.add(macArg);
@@ -319,9 +327,9 @@ public class Installer {
 
         for (JsonElement argElement : existingVmArgs) {
             String arg = argElement.getAsString();
-            boolean isOldJavaAgent   = arg.startsWith("-javaagent:");
-            boolean isDuplicateMacArg = Utils.IS_MAC && macRequiredArgs.contains(arg);
-            if (!isOldJavaAgent && !isDuplicateMacArg) {
+            boolean isOldJavaAgent = arg.startsWith("-javaagent:");
+            boolean isDuplicate = requiredVmArgs.contains(arg) || macRequiredArgs.contains(arg);
+            if (!isOldJavaAgent && !isDuplicate) {
                 updatedVmArgs.add(arg);
             }
         }

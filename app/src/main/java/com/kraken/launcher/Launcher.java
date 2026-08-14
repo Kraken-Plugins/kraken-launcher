@@ -15,9 +15,12 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.instrument.Instrumentation;
+import java.lang.management.ManagementFactory;
+import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Method;
 import java.net.*;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -54,6 +57,7 @@ public class Launcher {
 
     public static void main(String[] args) {
         log.info("Starting Kraken Launcher");
+        logRuntimeEnvironment();
 
         try {
             Instrumentation inst = getInstrumentation();
@@ -100,6 +104,45 @@ public class Launcher {
         });
     }
 
+
+    /**
+     * Logs the JVM the launcher was started with. RuneLite.exe loads its own bundled JRE from the install
+     * directory and ignores JAVA_HOME, so this is the only reliable way to know which runtime a user is on
+     * when a bug report comes in. The reflective class path injection depends on java.base/java.net being
+     * open, which any of the arguments and environment variables below can take away.
+     */
+    private static void logRuntimeEnvironment() {
+        try {
+            log.info("Java: {} ({}), vendor: {}", System.getProperty("java.version"),
+                    System.getProperty("java.runtime.version"), System.getProperty("java.vendor"));
+            log.info("Java home: {}", System.getProperty("java.home"));
+            log.info("JVM: {} {}", System.getProperty("java.vm.name"), System.getProperty("java.vm.version"));
+            log.info("OS: {} {} ({})", System.getProperty("os.name"), System.getProperty("os.version"),
+                    System.getProperty("os.arch"));
+            log.info("JVM arguments: {}", ManagementFactory.getRuntimeMXBean().getInputArguments());
+            log.info("Class path: {}", System.getProperty("java.class.path"));
+
+            for (String name : new String[]{"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "JAVA_HOME"}) {
+                String value = System.getenv(name);
+                if (value != null) {
+                    log.info("Environment {}={}", name, value);
+                }
+            }
+
+            boolean javaNetOpen = URLClassLoader.class.getModule().isOpen("java.net", Launcher.class.getModule());
+            log.info("java.base/java.net open to {}: {}", Launcher.class.getModule(), javaNetOpen);
+
+            if (!javaNetOpen) {
+                log.warn("java.base/java.net is not open to this module, so RuneLite's class loader cannot be " +
+                        "modified reflectively. The JVM was either started with --illegal-access=deny or is Java 16 " +
+                        "or newer without --add-opens=java.base/java.net=ALL-UNNAMED. Re-run the Kraken installer to " +
+                        "add the flag to config.json, and check the JVM arguments and environment variables above " +
+                        "for whatever removed the access.");
+            }
+        } catch (Exception e) {
+            log.warn("Failed to log the runtime environment: ", e);
+        }
+    }
 
     /**
      * Starts the launcher with preferences from the GUI
@@ -498,7 +541,46 @@ public class Launcher {
      */
     private void addUrlToClassLoader(URLClassLoader classLoader, URL url) throws Exception {
         Method addUrl = URLClassLoader.class.getDeclaredMethod("addURL", URL.class);
-        addUrl.setAccessible(true);
+
+        try {
+            addUrl.setAccessible(true);
+        } catch (InaccessibleObjectException e) {
+            log.warn("java.net is closed to this module, opening it through instrumentation. JVM arguments: {}",
+                    ManagementFactory.getRuntimeMXBean().getInputArguments());
+            openJavaNetPackage();
+            addUrl.setAccessible(true);
+        }
+
         addUrl.invoke(classLoader, url);
+    }
+
+    /**
+     * Opens java.base/java.net to this class loader's unnamed module so URLClassLoader.addURL can be
+     * made accessible. Java 16 and above enforce strong encapsulation, which blocks the reflective
+     * access unless the JVM was started with --add-opens or the package is opened through instrumentation.
+     */
+    private static void openJavaNetPackage() {
+        Instrumentation instrumentation;
+
+        try {
+            instrumentation = getInstrumentation();
+        } catch (IllegalStateException e) {
+            throw new IllegalStateException("Unable to open java.base/java.net because the Java agent is not " +
+                    "installed. Re-run the Kraken installer so --add-opens=java.base/java.net=ALL-UNNAMED is added " +
+                    "to the RuneLite config.json vmArgs.", e);
+        }
+
+        Module javaBase = URLClassLoader.class.getModule();
+        Module target = Launcher.class.getModule();
+
+        log.info("Opening java.base/java.net to {} via instrumentation", target);
+        instrumentation.redefineModule(
+                javaBase,
+                Collections.emptySet(),
+                Collections.emptyMap(),
+                Collections.singletonMap("java.net", Collections.singleton(target)),
+                Collections.emptySet(),
+                Collections.emptyMap()
+        );
     }
 }
