@@ -1,7 +1,6 @@
 package com.kraken.launcher;
 
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginManager;
 import net.runelite.client.ui.SplashScreen;
@@ -10,6 +9,7 @@ import javax.inject.Inject;
 import javax.swing.*;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Waits for the RuneLite's splash screen to be closed. Once closed the client is started and the
@@ -18,16 +18,17 @@ import java.util.List;
 @Slf4j
 public class ClientWatcher {
 
-    private final EventBus eventBus;
+    private static final long SPLASH_POLL_INTERVAL_MS = 2000;
+    private static final long SPLASH_WAIT_TIMEOUT_MS = 120_000;
+
     private final PluginManager pluginManager;
 
     @Inject
-    public ClientWatcher(EventBus eventBus, PluginManager pluginManager) {
-        this.eventBus = eventBus;
+    public ClientWatcher(PluginManager pluginManager) {
         this.pluginManager = pluginManager;
 
-        if(eventBus == null || pluginManager == null) {
-            log.error("EventBus or PluginManager instance is null. Cannot proceed to load Kraken loader plugin.");
+        if(pluginManager == null) {
+            log.error("PluginManager instance is null. Cannot proceed to load Kraken loader plugin.");
         }
     }
 
@@ -37,23 +38,30 @@ public class ClientWatcher {
      * and initialization happens on the Event Dispatch Thread (EDT) to prevent concurrency issues.
      * This method is called reflectively from Launcher.java
      *
-     * <p>During the splash screen wait period, the thread sleeps for a fixed interval. Once the
-     * splash screen closes, the Kraken loader plugin is loaded, enabled, and started using the
-     * provided {@link PluginManager}. If the plugin has already been auto-started by RuneLite, it
-     * is stopped and restarted to prevent inconsistent states.
+     * <p>During the splash screen wait period, the thread sleeps for a fixed interval, bounded by an overall
+     * timeout so a splash screen that never closes does not spin forever. Once the splash screen closes (or the
+     * timeout elapses), the Kraken loader plugin is loaded, enabled, and started using the provided
+     * {@link PluginManager}. If the plugin has already been auto-started by RuneLite, it is stopped and restarted
+     * to prevent inconsistent states.
      *
      * @param krakenLoaderPlugin The {@link Class} object representing the Kraken loader plugin to be
      *                           loaded and started. This must not be {@code null}.
      */
     public void start(Class<?> krakenLoaderPlugin) {
-        eventBus.register(this);
         log.info("Starting Client Watcher...");
-        new Thread(()-> {
-            while(SplashScreen.isOpen()) {
+        Thread watcherThread = new Thread(() -> {
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(SPLASH_WAIT_TIMEOUT_MS);
+            while (SplashScreen.isOpen()) {
+                if (System.nanoTime() >= deadline) {
+                    log.warn("Splash screen still open after {}ms; proceeding to load the Kraken plugin anyway.", SPLASH_WAIT_TIMEOUT_MS);
+                    break;
+                }
                 try {
-                    Thread.sleep(2000);
-                } catch(Exception ex) {
-                    log.error("exception occurred while sleeping during splash screen: ", ex);
+                    Thread.sleep(SPLASH_POLL_INTERVAL_MS);
+                } catch (InterruptedException ex) {
+                    log.warn("Interrupted while waiting for the splash screen to close; aborting Kraken plugin load.");
+                    Thread.currentThread().interrupt();
+                    return;
                 }
             }
 
@@ -86,6 +94,8 @@ public class ClientWatcher {
                     log.error("failed to start Kraken loader plugin", ex);
                 }
             });
-        }).start();
+        }, "com.kraken.launcher.client-watcher");
+        watcherThread.setDaemon(true);
+        watcherThread.start();
     }
 }

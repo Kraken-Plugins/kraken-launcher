@@ -39,6 +39,9 @@ public class Launcher {
 
     public static final String VERSION = loadVersion();
     private static final long CLASSLOADER_POLL_INTERVAL_MS = 500;
+    private static final long CLASSLOADER_WAIT_TIMEOUT_MS = 60_000;
+    private static final long INJECTOR_POLL_INTERVAL_MS = 25;
+    private static final long INJECTOR_WAIT_TIMEOUT_MS = 60_000;
     private static final long SHUTDOWN_TIMEOUT_SECONDS = 10;
     private static final String RUNELITE_PACKAGE = "net.runelite.client.rs";
     private static final String LAUNCHER_CLASS = "net.runelite.launcher.Launcher";
@@ -51,6 +54,8 @@ public class Launcher {
         this.executorService = Executors.newSingleThreadExecutor(r -> {
             Thread thread = new Thread(r, "com.kraken.launcher.patcher");
             thread.setDaemon(true);
+            thread.setUncaughtExceptionHandler((t, e) ->
+                    log.error("Uncaught exception on patcher thread {}: ", t.getName(), e));
             return thread;
         });
     }
@@ -148,6 +153,7 @@ public class Launcher {
      * Starts the launcher with preferences from the GUI
      * @param preferences The preferences to use for the patching process.
      * @param configure If true, the launcher will start in configure mode.
+     * @param qa True if this should use the QA bootstrap
      */
     public static void startWithPreferences(LauncherPreferences preferences, boolean configure, boolean qa) {
         System.setProperty("runelite.launcher.nojvm", "true");
@@ -169,6 +175,14 @@ public class Launcher {
                 log.info("Kraken Launcher failed to start, see error messages above.");
                 return;
             }
+        }
+
+        // Apply the SOCKS proxy before RuneLite (and therefore the game client) opens any sockets, and in every
+        // mode including RuneLite Mode. The bootstrap downloads in patch() above deliberately run first so they use
+        // a direct connection rather than routing through a proxy that may only be reachable for game traffic.
+        String proxy = preferences.getProxy();
+        if (proxy != null && !proxy.isEmpty()) {
+            configureProxy(proxy);
         }
 
         try {
@@ -206,31 +220,20 @@ public class Launcher {
             bootstrapDownloader.downloadRuneLiteBootstrap();
         } catch (IOException e) {
             log.error("Error fetching one of the bootstrap files, shutting down: ", e);
-            try {
-                SwingUtilities.invokeAndWait(() -> (new FatalErrorDialog("The Kraken Client is currently offline. Could not fetch RuneLite or Kraken's bootstrap.")).open());
-            } catch (Exception ex) {
-                log.error("Failed to show failure fetching bootstrap error to users: ", e);
-            }
+            showFatalError("The Kraken Client is currently offline. Could not fetch RuneLite or Kraken's bootstrap.");
             return false;
         }
 
-        if(bootstrapDownloader.getKrakenBootstrap() == null || bootstrapDownloader.getRuneliteBootstrap() == null) {
+        if (bootstrapDownloader.getKrakenBootstrap() == null || bootstrapDownloader.getRuneliteBootstrap() == null) {
             log.error("Kraken or RuneLite Bootstrap file is null. Cannot patch client classpath with unknown dependencies.");
-            try {
-                SwingUtilities.invokeAndWait(() -> (new FatalErrorDialog("The Kraken Client is currently offline. One of the bootstrap files is null.")).open());
-            } catch (Exception e) {
-                log.error("Failed to show null bootstrap error to users: ", e);
-            }
+            showFatalError("The Kraken Client is currently offline. One of the bootstrap files is null.");
             return false;
         }
 
-        if(!checkInjectedClientVersion(bootstrapDownloader, preferences)) {
-            log.error("RuneLite's injected-client artifact does not match Kraken's hash. RuneLite has pushed an update which needs to be verified.");
-            try {
-                SwingUtilities.invokeAndWait(() -> (new FatalErrorDialog("The Kraken Client is currently offline. (injected-client version mismatch) \n\nThis is likely due to RuneLite pushing a new client update that needs to be checked by the Kraken team to ensure it keeps the client safe and undetected. \n\nIf you would like to run vanilla RuneLite from this launcher, check the \"RuneLite Mode\" option in the launcher UI or skip this message AT YOUR OWN RISK by checking the \"Skip RuneLite Update Check\" checkbox.")).open());
-            } catch (Exception e) {
-                log.error("Failed to show injected-client-mismatch error to users: ", e);
-            }
+        SafetyCheckResult safety = checkInjectedClientVersion(bootstrapDownloader, preferences);
+        if (!safety.ok) {
+            log.error("RuneLite update safety check failed. Halting client startup until the update is verified.");
+            showFatalError(safety.message);
             return false;
         }
 
@@ -277,10 +280,6 @@ public class Launcher {
      * without reflectively mutating RuneLite's own class loader.
      */
     private void injectDependencies(LauncherPreferences preferences) {
-        if(!preferences.getProxy().isEmpty()) {
-            configureProxy(preferences.getProxy());
-        }
-
         try {
             ClassLoader classLoader = waitForRuneLiteClassLoader();
             log.info("RuneLite classLoader located");
@@ -298,17 +297,21 @@ public class Launcher {
             for (Artifact artifact : bootstrapDownloader.getKrakenBootstrap().getArtifacts()) {
                 log.debug("Adding JAR to RuneLite classpath: {}", artifact.getName());
 
-                // Don't cache the Kraken client or api. They change often, and the bootstrap should remain the source
-                // of truth for them
+                // The Kraken client and api change often, so they are re-fetched every launch with the bootstrap
+                // kept as the source of truth. They are still SHA-256 verified against the bootstrap hash, they are
+                // just not persisted to the long-lived cache. A verification failure aborts injection (fail closed)
+                // rather than loading unverified code into the client.
                 if (artifact.getName().toLowerCase().startsWith("kraken-client-")) {
                     System.setProperty("kraken-client-version", parseVersion(artifact.getName().toLowerCase(), "kraken-client-"));
-                    addUrlToClassLoader(urlClassLoader, new URL(artifact.getPath()));
+                    File verifiedClient = bootstrapDownloader.downloadVerified(artifact);
+                    addUrlToClassLoader(urlClassLoader, verifiedClient.toURI().toURL());
                     continue;
                 }
 
                 if (artifact.getName().toLowerCase().startsWith("kraken-api-")) {
                     System.setProperty("kraken-api-version", parseVersion(artifact.getName().toLowerCase(), "kraken-api-"));
-                    addUrlToClassLoader(urlClassLoader, new URL(artifact.getPath()));
+                    File verifiedApi = bootstrapDownloader.downloadVerified(artifact);
+                    addUrlToClassLoader(urlClassLoader, verifiedApi.toURI().toURL());
                     continue;
                 }
 
@@ -321,44 +324,9 @@ public class Launcher {
                 }
             }
 
-//          Wait for the RuneLite injector to be created by Guice.
-//          Once created it can be used to load the Kraken Client plugin
-            new Thread(() -> {
-                try {
-                    Class<?> runeLiteClass = classLoader.loadClass("net.runelite.client.RuneLite");
-                    Method getInjectorMethod = runeLiteClass.getDeclaredMethod("getInjector");
-
-                    Object injector = null;
-                    while (injector == null) {
-                        injector = getInjectorMethod.invoke(null);
-                        if (injector == null) {
-                            try {
-                                Thread.sleep(25);
-                            } catch (InterruptedException ex) {
-                                Thread.currentThread().interrupt();
-                                return;
-                            }
-                        }
-                    }
-
-                    Class<?> watcherClass = classLoader.loadClass("com.kraken.launcher.ClientWatcher");
-                    Class<?> krakenPluginMainClass = classLoader.loadClass("net.runelite.client.plugins.kraken.KrakenLoaderPlugin");
-
-                    // Load the Injector INTERFACE to avoid IllegalAccessException on the internal Impl class
-                    Class<?> injectorInterface = classLoader.loadClass("com.google.inject.Injector");
-                    Method getInstanceMethod = injectorInterface.getMethod("getInstance", Class.class);
-                    Object watcherInstance = getInstanceMethod.invoke(injector, watcherClass);
-
-                    // Start the watcher
-                    Method startMethod = watcherClass.getMethod("start", Class.class);
-                    startMethod.invoke(watcherInstance, krakenPluginMainClass);
-                    log.info("Kraken Client injected successfully.");
-                } catch (ClassNotFoundException e) {
-                    log.error("Class not found during injection (Check classpath/bootstrap): ", e);
-                } catch (Exception e) {
-                    log.error("Reflection error during injection: ", e);
-                }
-            }).start();
+            // Wait for the RuneLite injector to be created by Guice, then load the Kraken plugin. Runs on the same
+            // managed patcher executor rather than a bare thread so it is named, daemonised and shut down cleanly.
+            executorService.execute(() -> awaitInjectorAndStartWatcher(classLoader));
         } catch (InterruptedException e) {
             log.warn("Client patching process interrupted: ", e);
             Thread.currentThread().interrupt();
@@ -368,61 +336,157 @@ public class Launcher {
     }
 
     /**
-     * Configures network traffic to be relayed through a provided SOCKS5 proxy.
-     * @param proxyString The proxy string in the format ip:port:user:pass
+     * Waits for RuneLite's Guice injector to be created, then uses it to obtain a ClientWatcher and start the Kraken
+     * loader plugin. Bounded by {@link #INJECTOR_WAIT_TIMEOUT_MS} so a RuneLite that never publishes an injector
+     * degrades to vanilla instead of spinning forever. Runs on the patcher executor.
+     */
+    private void awaitInjectorAndStartWatcher(ClassLoader classLoader) {
+        try {
+            Class<?> runeLiteClass = classLoader.loadClass("net.runelite.client.RuneLite");
+            Method getInjectorMethod = runeLiteClass.getDeclaredMethod("getInjector");
+
+            Object injector = null;
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(INJECTOR_WAIT_TIMEOUT_MS);
+            while (injector == null) {
+                injector = getInjectorMethod.invoke(null);
+                if (injector == null) {
+                    if (System.nanoTime() >= deadline) {
+                        log.error("Timed out after {}ms waiting for RuneLite's Guice injector. Kraken client was not injected.", INJECTOR_WAIT_TIMEOUT_MS);
+                        return;
+                    }
+                    try {
+                        Thread.sleep(INJECTOR_POLL_INTERVAL_MS);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+
+            Class<?> watcherClass = classLoader.loadClass("com.kraken.launcher.ClientWatcher");
+            Class<?> krakenPluginMainClass = classLoader.loadClass("net.runelite.client.plugins.kraken.KrakenLoaderPlugin");
+
+            // Load the Injector INTERFACE to avoid IllegalAccessException on the internal Impl class
+            Class<?> injectorInterface = classLoader.loadClass("com.google.inject.Injector");
+            Method getInstanceMethod = injectorInterface.getMethod("getInstance", Class.class);
+            Object watcherInstance = getInstanceMethod.invoke(injector, watcherClass);
+
+            // Start the watcher
+            Method startMethod = watcherClass.getMethod("start", Class.class);
+            startMethod.invoke(watcherInstance, krakenPluginMainClass);
+            log.info("Kraken Client injected successfully.");
+        } catch (ClassNotFoundException e) {
+            log.error("Class not found during injection (Check classpath/bootstrap): ", e);
+        } catch (Exception e) {
+            log.error("Reflection error during injection: ", e);
+        }
+    }
+
+    /**
+     * Configures network traffic to be relayed through a provided SOCKS5 proxy. Applied once, before RuneLite
+     * starts, so it also covers RuneLite Mode.
+     * @param proxyString The proxy string in the format host:port or host:port:user:pass. IPv6 hosts must be
+     *                    wrapped in brackets, e.g. [::1]:1080. The password may contain colons; the host (unless
+     *                    bracketed), port, and username may not.
      */
     private static void configureProxy(String proxyString) {
-        try {
-            String[] parts = proxyString.split(":");
-            if (parts.length != 2 && parts.length != 4) {
-                log.error("Invalid proxy format. Expected IP:PORT or IP:PORT:USER:PASS, got: {}", proxyString);
-                return;
-            }
-
-            String proxyHost = parts[0];
-            String proxyPort = parts[1];
-            String proxyUser = parts.length == 4 ? parts[2] : "";
-            String proxyPass = parts.length == 4 ? parts[3] : "";
-
-            log.info("Configuring SOCKS5 proxy: {}:{}", proxyHost, proxyPort);
-
-            // Set SOCKS proxy (this handles both TCP and UDP traffic)
-            System.setProperty("socksProxyHost", proxyHost);
-            System.setProperty("socksProxyPort", proxyPort);
-            System.setProperty("socksProxyVersion", "5");
-
-            // For SOCKS5, we don't set HTTP/HTTPS proxy properties as they would take precedence
-            // and bypass the SOCKS proxy
-
-            // Configure SOCKS authentication if credentials provided
-            if (!proxyUser.isEmpty() && !proxyPass.isEmpty()) {
-                System.setProperty("java.net.socks.username", proxyUser);
-                System.setProperty("java.net.socks.password", proxyPass);
-
-                // Set up authenticator for SOCKS authentication
-                Authenticator.setDefault(new Authenticator() {
-                    @Override
-                    protected PasswordAuthentication getPasswordAuthentication() {
-                        if (getRequestorType() == RequestorType.PROXY) {
-                            // Check if this is a SOCKS proxy request
-                            String protocol = getRequestingProtocol();
-                            log.info("Requesting proxy protocol: {}", protocol);
-                            if (protocol != null && protocol.toLowerCase().contains("socks")) {
-                                return new PasswordAuthentication(proxyUser, proxyPass.toCharArray());
-                            }
-                        }
-                        return null;
-                    }
-                });
-
-                log.info("SOCKS5 authentication configured for user: {}", proxyUser);
-            } else {
-                log.info("SOCKS5 proxy configured without authentication");
-            }
-
-        } catch (Exception e) {
-            log.error("Failed to configure SOCKS5 proxy: {}", e.getMessage(), e);
+        ProxySpec spec = parseProxy(proxyString);
+        if (spec == null) {
+            return;
         }
+
+        log.info("Configuring SOCKS5 proxy: {}:{}", spec.host, spec.port);
+
+        // SOCKS handles both TCP and UDP. HTTP/HTTPS proxy properties are deliberately not set - they would take
+        // precedence and bypass the SOCKS proxy.
+        System.setProperty("socksProxyHost", spec.host);
+        System.setProperty("socksProxyPort", spec.port);
+        System.setProperty("socksProxyVersion", "5");
+
+        if (!spec.user.isEmpty() && !spec.pass.isEmpty()) {
+            System.setProperty("java.net.socks.username", spec.user);
+            System.setProperty("java.net.socks.password", spec.pass);
+
+            Authenticator.setDefault(new Authenticator() {
+                @Override
+                protected PasswordAuthentication getPasswordAuthentication() {
+                    if (getRequestorType() == RequestorType.PROXY) {
+                        String protocol = getRequestingProtocol();
+                        log.info("Requesting proxy protocol: {}", protocol);
+                        if (protocol != null && protocol.toLowerCase().contains("socks")) {
+                            return new PasswordAuthentication(spec.user, spec.pass.toCharArray());
+                        }
+                    }
+                    return null;
+                }
+            });
+
+            log.info("SOCKS5 authentication configured for user: {}", spec.user);
+        } else {
+            log.info("SOCKS5 proxy configured without authentication");
+        }
+    }
+
+    /**
+     * Parses a proxy string of the form host:port or host:port:user:pass into its parts. IPv6 hosts must be
+     * bracketed (e.g. [::1]:1080) so their colons are not mistaken for delimiters. The password is taken as the
+     * remainder after the username, so it may itself contain colons.
+     * @return the parsed spec, or null if the string is malformed (an error is logged in that case).
+     */
+    private static ProxySpec parseProxy(String proxyString) {
+        String remainder = proxyString.trim();
+        if (remainder.isEmpty()) {
+            return null;
+        }
+
+        String host;
+        if (remainder.startsWith("[")) {
+            int close = remainder.indexOf(']');
+            if (close < 0) {
+                log.error("Invalid proxy: missing closing ']' for IPv6 host: {}", proxyString);
+                return null;
+            }
+            host = remainder.substring(1, close);
+            remainder = remainder.substring(close + 1);
+            if (!remainder.startsWith(":")) {
+                log.error("Invalid proxy: expected ':port' after IPv6 host: {}", proxyString);
+                return null;
+            }
+            remainder = remainder.substring(1);
+        } else {
+            int firstColon = remainder.indexOf(':');
+            if (firstColon <= 0) {
+                log.error("Invalid proxy format. Expected host:port or host:port:user:pass (bracket IPv6 hosts): {}", proxyString);
+                return null;
+            }
+            host = remainder.substring(0, firstColon);
+            remainder = remainder.substring(firstColon + 1);
+        }
+
+        String port;
+        String user = "";
+        String pass = "";
+        int portEnd = remainder.indexOf(':');
+        if (portEnd < 0) {
+            port = remainder;
+        } else {
+            port = remainder.substring(0, portEnd);
+            String creds = remainder.substring(portEnd + 1);
+            int userEnd = creds.indexOf(':');
+            if (userEnd < 0) {
+                log.error("Invalid proxy format. Expected host:port or host:port:user:pass: {}", proxyString);
+                return null;
+            }
+            user = creds.substring(0, userEnd);
+            pass = creds.substring(userEnd + 1);
+        }
+
+        if (!port.matches("\\d+")) {
+            log.error("Invalid proxy port '{}' in: {}", port, proxyString);
+            return null;
+        }
+
+        return new ProxySpec(host, port, user, pass);
     }
 
     /**
@@ -449,15 +513,15 @@ public class Launcher {
      * the client is safe to use.
      * @return True if RuneLite's injected client hash matches Kraken's (i.e RuneLite has not pushed a new update).
      */
-    private boolean checkInjectedClientVersion(BootstrapDownloader downloader, LauncherPreferences preferences) {
+    private SafetyCheckResult checkInjectedClientVersion(BootstrapDownloader downloader, LauncherPreferences preferences) {
         if (preferences.isSkipUpdateCheck()) {
             log.warn("Skipping update check as requested - USE AT YOUR OWN RISK");
-            return true;
+            return SafetyCheckResult.ok();
         }
 
-        if(downloader.getRuneliteBootstrap() == null || downloader.getKrakenBootstrap() == null) {
+        if (downloader.getRuneliteBootstrap() == null || downloader.getKrakenBootstrap() == null) {
             log.error("Cannot check injected client hash, either Kraken or RuneLite's bootstrap is null");
-            return false;
+            return SafetyCheckResult.fail(offlineMessage("bootstrap unavailable"));
         }
 
         Bootstrap runeliteBootstrap = downloader.getRuneliteBootstrap();
@@ -468,39 +532,108 @@ public class Launcher {
                 .findFirst()
                 .orElse(null);
 
-        if (injectedClient != null) {
-            Artifact hook = Arrays.stream(runeliteBootstrap.getArtifacts())
-                    .filter((a) -> a.getName().contains("rlicn-"))
-                    .findFirst()
-                    .orElse(null);
-
-            if (hook == null) {
-                SwingUtilities.invokeLater(() -> (new FatalErrorDialog("The Kraken Client is currently offline. (RLICN artifact missing) \n\nThis is likely due to RuneLite pushing a new client update that needs to be checked by the Kraken team to ensure it keeps the client safe and undetected. \n\nIf you would like to run vanilla RuneLite from this launcher, set runelite mode in the runelite (configure) window or use the --rl arg or skip this message AT YOUR OWN RISK by checking the \"Skip RuneLite Update Check\" checkbox.")).open());
-                return false;
-            }
-
-            log.info("kraken bootstrap hash: {} injected client hash: {}", krakenBootstrap.getHash(), injectedClient.getHash());
-            if (!krakenBootstrap.getHash().equalsIgnoreCase(injectedClient.getHash())) {
-                SwingUtilities.invokeLater(() -> (new FatalErrorDialog("The Kraken Client is currently offline. (injected version mismatch) \n\nThis is likely due to RuneLite pushing a new client update that needs to be checked by the Kraken team to ensure it keeps the client safe and undetected. \n\nIf you would like to run vanilla RuneLite from this launcher, set runelite mode in the runelite (configure) window or use the --rl arg or skip this message AT YOUR OWN RISK by checking the \"Skip RuneLite Update Check\" checkbox.")).open());
-                return false;
-
-                // If RuneLite tries to change anything with regards to these DLL hooks we should fail the client startup
-                // as something fishy is going on
-            } else if (krakenBootstrap.getHookHash() != null && krakenBootstrap.getHookHash().equalsIgnoreCase(hook.getHash())) {
-                return true;
-            }
-
-            SwingUtilities.invokeLater(() -> (new FatalErrorDialog("The Kraken Client is currently offline. (RLICN hash mismatch) \n\nThis is likely due to RuneLite pushing a new client update that needs to be checked by the Kraken team to ensure it keeps the client safe and undetected. \n\nIf you would like to run vanilla RuneLite from this launcher, set runelite mode in the runelite (configure) window or use the --rl arg or skip this message AT YOUR OWN RISK by checking the \"Skip RuneLite Update Check\" checkbox.")).open());
+        if (injectedClient == null) {
+            log.error("Could not locate RuneLite's injected-client artifact in RuneLite's bootstrap");
+            return SafetyCheckResult.fail(offlineMessage("injected-client artifact missing"));
         }
 
-        log.error("Could not locate RuneLite's injected-client artifact in bootstrap or Kraken's client in Kraken's bootstrap");
-        return false;
+        Artifact hook = Arrays.stream(runeliteBootstrap.getArtifacts())
+                .filter((a) -> a.getName().contains("rlicn-"))
+                .findFirst()
+                .orElse(null);
+
+        if (hook == null) {
+            log.error("Could not locate RuneLite's rlicn artifact in RuneLite's bootstrap");
+            return SafetyCheckResult.fail(offlineMessage("RLICN artifact missing"));
+        }
+
+        String krakenHash = krakenBootstrap.getHash();
+        log.info("kraken bootstrap hash: {} injected client hash: {}", krakenHash, injectedClient.getHash());
+        if (krakenHash == null || !krakenHash.equalsIgnoreCase(injectedClient.getHash())) {
+            log.error("Kraken bootstrap hash does not match RuneLite's injected-client hash. kraken: {}, injected-client: {}", krakenHash, injectedClient.getHash());
+            return SafetyCheckResult.fail(offlineMessage("injected version mismatch"));
+        }
+
+        // The rlicn (DLL hook) artifact must exactly match Kraken's known-good hookHash. A missing hookHash or a
+        // changed hash both mean RuneLite shipped an update to the hooks that has to be manually verified before
+        // the client is safe to run, so fail closed for every user until that review happens.
+        String hookHash = krakenBootstrap.getHookHash();
+        if (hookHash == null || hookHash.isEmpty() || !hookHash.equalsIgnoreCase(hook.getHash())) {
+            log.error("Kraken hookHash is missing or does not match RuneLite's rlicn artifact. kraken hookHash: {}, rlicn hash: {}", hookHash, hook.getHash());
+            return SafetyCheckResult.fail(offlineMessage("RuneLite update detected"));
+        }
+
+        return SafetyCheckResult.ok();
+    }
+
+    /**
+     * Builds the user-facing "offline" message shown when the RuneLite update safety check fails. The reason is
+     * surfaced in parentheses so support can tell the failure modes apart while the guidance stays consistent.
+     */
+    private static String offlineMessage(String reason) {
+        return "The Kraken Client is currently offline. (" + reason + ") \n\n"
+                + "This is likely due to RuneLite pushing a new client update that needs to be checked by the "
+                + "Kraken team to ensure it keeps the client safe and undetected. \n\n"
+                + "If you would like to run vanilla RuneLite from this launcher, check the \"RuneLite Mode\" option "
+                + "in the launcher UI or skip this message AT YOUR OWN RISK by checking the \"Skip Update Check\" checkbox.";
+    }
+
+    /**
+     * Shows a single modal fatal-error dialog and blocks until it is created. The patching pipeline always runs off
+     * the Event Dispatch Thread, so invokeAndWait is safe here.
+     */
+    private static void showFatalError(String message) {
+        try {
+            SwingUtilities.invokeAndWait(() -> new FatalErrorDialog(message).open());
+        } catch (Exception e) {
+            log.error("Failed to show fatal error dialog to user: ", e);
+        }
+    }
+
+    /**
+     * Outcome of the RuneLite update safety check. When {@link #ok} is false, {@link #message} carries the single
+     * user-facing explanation for the caller to display.
+     */
+    private static final class SafetyCheckResult {
+        final boolean ok;
+        final String message;
+
+        private SafetyCheckResult(boolean ok, String message) {
+            this.ok = ok;
+            this.message = message;
+        }
+
+        static SafetyCheckResult ok() {
+            return new SafetyCheckResult(true, null);
+        }
+
+        static SafetyCheckResult fail(String message) {
+            return new SafetyCheckResult(false, message);
+        }
+    }
+
+    /**
+     * Parsed SOCKS proxy connection details.
+     */
+    private static final class ProxySpec {
+        final String host;
+        final String port;
+        final String user;
+        final String pass;
+
+        ProxySpec(String host, String port, String user, String pass) {
+            this.host = host;
+            this.port = port;
+            this.user = user;
+            this.pass = pass;
+        }
     }
 
     /**
      * Polls for the RuneLite ClassLoader until it's available.
      */
     private ClassLoader waitForRuneLiteClassLoader() throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CLASSLOADER_WAIT_TIMEOUT_MS);
         while (!Thread.currentThread().isInterrupted()) {
             ClassLoader classLoader = (ClassLoader) UIManager.get("ClassLoader");
             if(classLoader != null) {
@@ -509,6 +642,12 @@ public class Launcher {
                         return classLoader;
                     }
                 }
+            }
+
+            if (System.nanoTime() >= deadline) {
+                throw new IllegalStateException("Timed out after " + CLASSLOADER_WAIT_TIMEOUT_MS
+                        + "ms waiting for RuneLite's class loader. RuneLite may have failed to start or changed how "
+                        + "it exposes its class loader.");
             }
 
             Thread.sleep(Launcher.CLASSLOADER_POLL_INTERVAL_MS);
@@ -530,7 +669,7 @@ public class Launcher {
         }
 
         if (!uri.getPath().endsWith(".jar")) {
-            uri = uri.resolve("kraken-launcher-1.0.0-fat.jar");
+            uri = uri.resolve("kraken-launcher-" + VERSION + "-fat.jar");
         }
 
         return uri.toURL();

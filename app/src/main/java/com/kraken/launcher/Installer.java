@@ -1,6 +1,7 @@
 package com.kraken.launcher;
 
 import com.google.gson.*;
+import com.kraken.launcher.ui.Theme;
 import com.kraken.launcher.util.Utils;
 import lombok.extern.slf4j.Slf4j;
 
@@ -9,8 +10,12 @@ import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.io.*;
 import java.net.URL;
+import java.net.URLConnection;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.stream.Collectors;
 
@@ -20,6 +25,8 @@ public class Installer {
     private static final String CONFIG_FILE = Utils.RUNELITE_DIR + File.separator + "config.json";
     private static final String SETTINGS_FILE = Utils.RUNELITE_DIR + File.separator + "settings.json";
     private static final String TARGET_MAIN_CLASS = "com.kraken.launcher.Launcher";
+    private static final int DOWNLOAD_CONNECT_TIMEOUT_MS = 10_000;
+    private static final int DOWNLOAD_READ_TIMEOUT_MS = 60_000;
 
     public static void main(String[] args) {
         log.info("Starting Kraken Installation process...");
@@ -46,7 +53,7 @@ public class Installer {
         frame.setResizable(false);
 
         JPanel header = new JPanel();
-        header.setBackground(new Color(30, 30, 30));
+        header.setBackground(Theme.DARK_BG);
         header.setBorder(new EmptyBorder(18, 24, 18, 24));
         header.setLayout(new BoxLayout(header, BoxLayout.X_AXIS));
 
@@ -65,7 +72,7 @@ public class Installer {
         JButton uninstallBtn = createStyledButton("Uninstall", new Color(180, 50, 50));
 
         JPanel buttons = new JPanel(new GridLayout(1, 2, 12, 0));
-        buttons.setBackground(new Color(45, 45, 45));
+        buttons.setBackground(Theme.CARD_BG);
         buttons.setBorder(new EmptyBorder(20, 24, 20, 24));
         buttons.add(installBtn);
         buttons.add(uninstallBtn);
@@ -77,7 +84,7 @@ public class Installer {
         status.setBorder(new EmptyBorder(0, 24, 14, 24));
 
         JPanel statusPanel = new JPanel(new BorderLayout());
-        statusPanel.setBackground(new Color(45, 45, 45));
+        statusPanel.setBackground(Theme.CARD_BG);
         statusPanel.add(status, BorderLayout.CENTER);
 
         JPanel content = new JPanel(new BorderLayout());
@@ -180,12 +187,10 @@ public class Installer {
         if (currentJar.getName().toLowerCase().endsWith(".exe")) {
             jarName = "KrakenSetup.jar";
             File targetJar = new File(targetDir, jarName);
-            URL url = new URL("https://minio.kraken-plugins.com/kraken-bootstrap-static/" + jarName);
-            log.info("Running as .exe file, fetching JAR from MinIO: {}", url);
-            try (InputStream in = url.openStream()) {
-                Files.copy(in, targetJar.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            }
-            log.info("Successfully copied: {} into: {}", jarName, targetJar.getAbsolutePath());
+            String base = "https://minio.kraken-plugins.com/kraken-bootstrap-static/";
+            log.info("Running as .exe file, fetching JAR from MinIO: {}{}", base, jarName);
+            downloadAndVerifyJar(new URL(base + jarName), new URL(base + jarName + ".sha256"), targetDir, targetJar);
+            log.info("Successfully downloaded and verified: {} into: {}", jarName, targetJar.getAbsolutePath());
         } else {
             log.info("Running as jar file, copying self to RuneLite directory.");
             jarName = currentJar.getName();
@@ -206,6 +211,79 @@ public class Installer {
         }
 
         log.info("Kraken Launcher installation completed successfully.");
+    }
+
+    /**
+     * Downloads the launcher jar to a temporary file, verifies its SHA-256 against the checksum published next to it,
+     * then atomically moves it into place. The jar becomes a -javaagent (full JVM access), so a corrupted or
+     * truncated download must never be installed. Note: the checksum lives in the same bucket as the jar, so this
+     * guards integrity (partial downloads, CDN corruption) rather than authenticity against a compromised bucket -
+     * that would require a code-signed installer or a hash pinned outside the bucket.
+     */
+    private static void downloadAndVerifyJar(URL jarUrl, URL checksumUrl, File targetDir, File targetJar) throws IOException {
+        File tempJar = File.createTempFile("KrakenSetup-", ".jar.part", targetDir);
+        try {
+            URLConnection connection = jarUrl.openConnection();
+            connection.setConnectTimeout(DOWNLOAD_CONNECT_TIMEOUT_MS);
+            connection.setReadTimeout(DOWNLOAD_READ_TIMEOUT_MS);
+            try (InputStream in = connection.getInputStream()) {
+                Files.copy(in, tempJar.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            String expectedHash;
+            try {
+                expectedHash = fetchString(checksumUrl).split("\\s+")[0];
+            } catch (FileNotFoundException e) {
+                throw new IOException("Could not find the integrity checksum for " + targetJar.getName() + " ("
+                        + checksumUrl + "). The release may still be publishing; please try again in a few minutes.", e);
+            }
+            String actualHash = sha256Hex(tempJar);
+            if (!expectedHash.equalsIgnoreCase(actualHash)) {
+                throw new IOException("Downloaded " + targetJar.getName() + " failed SHA-256 verification. Expected "
+                        + expectedHash + " but got " + actualHash + ". Refusing to install a tampered or corrupted jar.");
+            }
+
+            Files.move(tempJar.toPath(), targetJar.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(tempJar.toPath());
+        }
+    }
+
+    /**
+     * Reads the full body at the given URL as a trimmed UTF-8 string, with connect and read timeouts.
+     */
+    private static String fetchString(URL url) throws IOException {
+        URLConnection connection = url.openConnection();
+        connection.setConnectTimeout(DOWNLOAD_CONNECT_TIMEOUT_MS);
+        connection.setReadTimeout(DOWNLOAD_READ_TIMEOUT_MS);
+        try (InputStream in = connection.getInputStream()) {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8).trim();
+        }
+    }
+
+    /**
+     * Computes the lowercase hex SHA-256 of a file.
+     */
+    private static String sha256Hex(File file) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (InputStream in = new BufferedInputStream(new FileInputStream(file))) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+            byte[] hash = digest.digest();
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+                sb.append(Character.forDigit(b & 0xF, 16));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IOException("SHA-256 algorithm not available", e);
+        }
     }
 
     private static void updateSettingsJson() throws IOException {
@@ -359,15 +437,27 @@ public class Installer {
                         + "codesign --force --deep --sign - /Applications/RuneLite.app\" "
                         + "with administrator privileges";
 
-        Process process = Runtime.getRuntime().exec(new String[]{"osascript", "-e", appleScript});
+        ProcessBuilder builder = new ProcessBuilder("osascript", "-e", appleScript);
+        builder.redirectErrorStream(true);
+        Process process = builder.start();
+
+        // Drain the merged stdout/stderr before waiting so the process cannot block on a full output buffer.
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append(System.lineSeparator());
+            }
+        }
+
         int exitCode = process.waitFor();
 
         if (exitCode != 0) {
-            log.error("Failed to apply macOS Gatekeeper fixes. Exit code: {}", exitCode);
+            log.error("Failed to apply macOS Gatekeeper fixes. Exit code: {}. Output: {}", exitCode, output.toString().trim());
             return false;
         }
 
-        log.info("macOS Gatekeeper and Code Signing fixed successfully.");
+        log.info("macOS Gatekeeper and Code Signing fixed successfully. Output: {}", output.toString().trim());
         return true;
     }
 

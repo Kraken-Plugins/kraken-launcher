@@ -32,7 +32,6 @@ dependencies {
     implementation("net.bytebuddy:byte-buddy-agent:1.18.4")
 
     implementation 'org.slf4j:slf4j-api:1.7.36'
-    implementation("org.slf4j:slf4j-simple:1.7.36")
     implementation 'ch.qos.logback:logback-classic:1.2.12'
 
     compileOnly 'org.projectlombok:lombok:1.18.30'
@@ -86,6 +85,37 @@ shadowJar {
                 'Can-Retransform-Classes': 'true',
                 'Can-Redefine-Classes': 'true'
         )
+    }
+}
+
+// Writes app/build/libs/KrakenSetup.jar.sha256 - the SHA-256 of the fat jar. The fat jar is uploaded to MinIO as
+// KrakenSetup.jar (same bytes, just renamed), so this is exactly the checksum the .exe installer downloads to verify
+// the jar before installing it as a -javaagent. CI runs this task and uploads the file; run it locally to produce a
+// checksum you can upload for testing.
+tasks.register('sha256') {
+    description = 'Computes the SHA-256 of the fat jar into build/libs/KrakenSetup.jar.sha256'
+    group = 'build'
+    dependsOn tasks.shadowJar
+
+    def jarProvider = tasks.shadowJar.archiveFile
+    def outFile = layout.buildDirectory.file('libs/KrakenSetup.jar.sha256')
+
+    inputs.file(jarProvider)
+    outputs.file(outFile)
+
+    doLast {
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        jarProvider.get().asFile.withInputStream { stream ->
+            byte[] buffer = new byte[8192]
+            int read
+            while ((read = stream.read(buffer)) != -1) {
+                digest.update(buffer, 0, read)
+            }
+        }
+        def hex = digest.digest().encodeHex().toString()
+        def out = outFile.get().asFile
+        out.text = hex + '\n'
+        logger.lifecycle("Wrote ${out} : ${hex}")
     }
 }
 

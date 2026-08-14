@@ -19,10 +19,10 @@ import java.net.URL;
 public class FatalErrorDialog extends JDialog {
 
     // Kraken Color Palette
-    private static final Color DARK_GRAY_BG = new Color(30, 30, 30);
-    private static final Color LIGHTER_GRAY_BG = new Color(45, 45, 45);
-    private static final Color KRAKEN_GREEN = new Color(0, 255, 140); // Vibrant Green
-    private static final Color TEXT_COLOR = new Color(220, 220, 220);
+    private static final Color DARK_GRAY_BG = Theme.DARK_BG;
+    private static final Color LIGHTER_GRAY_BG = Theme.CARD_BG;
+    private static final Color KRAKEN_GREEN = Theme.ACCENT_GREEN;
+    private static final Color TEXT_COLOR = Theme.TEXT;
 
     private final String message;
 

@@ -2,6 +2,7 @@ package com.kraken.launcher.ui;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonParseException;
 import com.kraken.launcher.Launcher;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -19,10 +20,10 @@ public class LauncherUI extends JFrame {
 
     private static final String PREFS_DIR = System.getProperty("user.home") + "/.runelite/kraken";
     private static final String PREFS_FILE = PREFS_DIR + "/krakenprefs.json";
-    public static final Color PRIMARY_GREEN = new Color(0, 200, 83);
-    public static final Color DARK_BG = new Color(30, 30, 30);
-    private static final Color CARD_BG = new Color(45, 45, 45);
-    private static final Color TEXT_COLOR = new Color(220, 220, 220);
+    public static final Color PRIMARY_GREEN = Theme.PRIMARY_GREEN;
+    public static final Color DARK_BG = Theme.DARK_BG;
+    private static final Color CARD_BG = Theme.CARD_BG;
+    private static final Color TEXT_COLOR = Theme.TEXT;
 
     @Getter
     private final LauncherPreferences preferences;
@@ -203,11 +204,7 @@ public class LauncherUI extends JFrame {
 
     public void onStartClicked(boolean configure, boolean qa) {
         log.info("Starting RuneLite launcher");
-        preferences.setRuneliteMode(runeliteModeCheckbox.isSelected());
-        preferences.setSkipUpdateCheck(skipUpdateCheckbox.isSelected());
-        preferences.setSkipLauncher(skipLauncherCheckbox.isSelected());
-        preferences.setProxy(proxyTextField.getText().trim());
-        savePreferences();
+        persistPreferencesFromUI();
 
         setVisible(false);
 
@@ -230,12 +227,19 @@ public class LauncherUI extends JFrame {
     }
 
     private void onCancelClicked() {
+        persistPreferencesFromUI();
+        System.exit(0);
+    }
+
+    /**
+     * Copies the current UI selections into the preferences object and writes them to disk.
+     */
+    private void persistPreferencesFromUI() {
         preferences.setRuneliteMode(runeliteModeCheckbox.isSelected());
         preferences.setSkipUpdateCheck(skipUpdateCheckbox.isSelected());
         preferences.setSkipLauncher(skipLauncherCheckbox.isSelected());
         preferences.setProxy(proxyTextField.getText().trim());
         savePreferences();
-        System.exit(0);
     }
 
     private void loadPreferencesToUI() {
@@ -249,8 +253,12 @@ public class LauncherUI extends JFrame {
         File prefsFile = new File(PREFS_FILE);
         if (prefsFile.exists()) {
             try (FileReader reader = new FileReader(prefsFile)) {
-                return gson.fromJson(reader, LauncherPreferences.class);
-            } catch (IOException e) {
+                LauncherPreferences loaded = gson.fromJson(reader, LauncherPreferences.class);
+                if (loaded != null) {
+                    return loaded;
+                }
+                log.warn("Preferences file was empty or contained only null, using defaults");
+            } catch (IOException | JsonParseException e) {
                 log.warn("Failed to load preferences, using defaults", e);
             }
         }

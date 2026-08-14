@@ -8,13 +8,13 @@ import com.kraken.launcher.bootstrap.model.Bootstrap;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
-import javax.inject.Singleton;
 import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.URL;
+import java.net.URLConnection;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -24,18 +24,20 @@ import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 
 @Slf4j
-@Singleton
 public class BootstrapDownloader {
     private static final String KRAKEN_BOOTSTRAP_BASE = "https://minio.kraken-plugins.com/kraken-bootstrap-static/";
     private static final String RUNELITE_BOOTSTRAP = "https://static.runelite.net/bootstrap.json";
+    private static final int REQUEST_TIMEOUT_SECONDS = 20;
+    private static final int ARTIFACT_CONNECT_TIMEOUT_MS = 10_000;
+    private static final int ARTIFACT_READ_TIMEOUT_MS = 60_000;
     private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private final Gson gson = new Gson();
 
     @Getter
-    private Bootstrap krakenBootstrap = null;
+    private volatile Bootstrap krakenBootstrap = null;
 
     @Getter
-    private Bootstrap runeliteBootstrap = null;
+    private volatile Bootstrap runeliteBootstrap = null;
 
     private final String krakenBootstrapUrl;
 
@@ -66,7 +68,11 @@ public class BootstrapDownloader {
     }
 
     private String fetchBootstrap(String url) throws IOException {
-        HttpRequest bootstrapReq = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+        HttpRequest bootstrapReq = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
+                .GET()
+                .build();
         try {
             HttpResponse<String> resp = httpClient.send(bootstrapReq, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() != 200) {
@@ -87,7 +93,18 @@ public class BootstrapDownloader {
         }
     }
 
-    public File cacheArtifact(Artifact artifact) throws Exception {
+    /**
+     * Opens a stream to the given URL with connect and read timeouts so a slow or hung server cannot stall the
+     * launcher indefinitely while downloading an artifact.
+     */
+    private InputStream openStream(URL url) throws IOException {
+        URLConnection connection = url.openConnection();
+        connection.setConnectTimeout(ARTIFACT_CONNECT_TIMEOUT_MS);
+        connection.setReadTimeout(ARTIFACT_READ_TIMEOUT_MS);
+        return connection.getInputStream();
+    }
+
+    private File resolveCacheDir() throws IOException {
         File cacheDir = new File(System.getProperty("user.home"), ".runelite").toPath()
                 .resolve("kraken")
                 .resolve("repository2")
@@ -96,6 +113,11 @@ public class BootstrapDownloader {
         if (!cacheDir.exists() && !cacheDir.mkdirs()) {
             throw new IOException("Unable to create Kraken cache directory: " + cacheDir.getAbsolutePath());
         }
+        return cacheDir;
+    }
+
+    public File cacheArtifact(Artifact artifact) throws Exception {
+        File cacheDir = resolveCacheDir();
 
         String expectedHash = artifact.getHash();
         if (expectedHash == null || expectedHash.isBlank()) {
@@ -106,7 +128,7 @@ public class BootstrapDownloader {
 
         if (localFile.exists()) {
             String localHash = computeHash(localFile);
-            if (expectedHash.equals(localHash)) {
+            if (expectedHash.equalsIgnoreCase(localHash)) {
                 log.info("Cache hit for artifact: {}", artifact.getName());
                 return localFile;
             }
@@ -120,12 +142,12 @@ public class BootstrapDownloader {
         Path tempFile = Files.createTempFile(cacheDir.toPath(), artifact.getName() + "-", ".part");
         try {
             URL url = new URL(artifact.getPath());
-            try (InputStream in = new BufferedInputStream(url.openStream())) {
+            try (InputStream in = new BufferedInputStream(openStream(url))) {
                 Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
             }
 
             String downloadedHash = computeHash(tempFile.toFile());
-            if (!expectedHash.equals(downloadedHash)) {
+            if (!expectedHash.equalsIgnoreCase(downloadedHash)) {
                 throw new IOException("SHA-256 verification failed for " + artifact.getName()
                         + ". Expected " + expectedHash + " but got " + downloadedHash);
             }
@@ -136,5 +158,44 @@ public class BootstrapDownloader {
         }
 
         return localFile;
+    }
+
+    /**
+     * Downloads an artifact to a temporary file and verifies its SHA-256 against the bootstrap hash without
+     * persisting it to the long-lived cache. Used for the Kraken client and api jars, which change frequently
+     * and are re-fetched every launch with the bootstrap kept as the source of truth. The file is scheduled for
+     * deletion on JVM exit so it survives the client session but is not reused between runs.
+     * @param artifact The artifact to download and verify.
+     * @return A verified local file whose contents match the bootstrap hash.
+     * @throws IOException if the hash is missing or the downloaded bytes fail verification.
+     */
+    public File downloadVerified(Artifact artifact) throws Exception {
+        String expectedHash = artifact.getHash();
+        if (expectedHash == null || expectedHash.isBlank()) {
+            throw new IOException("Bootstrap hash missing for artifact: " + artifact.getName());
+        }
+
+        File cacheDir = resolveCacheDir();
+        Path tempFile = Files.createTempFile(cacheDir.toPath(), artifact.getName() + "-", ".jar");
+        tempFile.toFile().deleteOnExit();
+
+        log.info("Downloading and verifying artifact (uncached): {}", artifact.getName());
+        try {
+            URL url = new URL(artifact.getPath());
+            try (InputStream in = new BufferedInputStream(openStream(url))) {
+                Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            String downloadedHash = computeHash(tempFile.toFile());
+            if (!expectedHash.equalsIgnoreCase(downloadedHash)) {
+                throw new IOException("SHA-256 verification failed for " + artifact.getName()
+                        + ". Expected " + expectedHash + " but got " + downloadedHash);
+            }
+
+            return tempFile.toFile();
+        } catch (Exception e) {
+            Files.deleteIfExists(tempFile);
+            throw e;
+        }
     }
 }

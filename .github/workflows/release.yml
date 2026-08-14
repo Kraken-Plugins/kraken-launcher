@@ -56,7 +56,7 @@ jobs:
       - name: Build Fat Jar and Windows Exe
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
-        run: ./gradlew shadowJar createExe --no-daemon
+        run: ./gradlew shadowJar createExe sha256 --no-daemon
 
       - name: Download Windows JRE
         run: |
@@ -79,11 +79,8 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           EXE_FILE="app/build/launch4j/KrakenInstaller.exe"
-          
-          # Create a staging directory
           mkdir -p dist/KrakenLauncher
           
-          # Copy the Exe
           cp "$EXE_FILE" dist/KrakenLauncher/
           
           # Copy the JRE folder into the staging directory named 'jre'
@@ -130,6 +127,10 @@ jobs:
           
           mc cp "${{ env.DIST_FILE }}" "s3/kraken-bootstrap-static/KrakenLauncher-Windows.zip"
           mc cp "$JAR_FILE" "s3/kraken-bootstrap-static/KrakenSetup.jar"
+
+          # Publish the SHA-256 (produced by the gradle 'sha256' task, the same mechanism used locally) next to the
+          # jar so the .exe installer can verify the download before installing it as a -javaagent.
+          mc cp app/build/libs/KrakenSetup.jar.sha256 "s3/kraken-bootstrap-static/KrakenSetup.jar.sha256"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
