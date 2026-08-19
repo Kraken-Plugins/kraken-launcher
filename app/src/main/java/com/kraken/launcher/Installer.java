@@ -230,15 +230,15 @@ public class Installer {
                 Files.copy(in, tempJar.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
 
-            String expectedHash;
-            try {
-                expectedHash = fetchString(checksumUrl).split("\\s+")[0];
-            } catch (FileNotFoundException e) {
-                throw new IOException("Could not find the integrity checksum for " + targetJar.getName() + " ("
-                        + checksumUrl + "). The release may still be publishing; please try again in a few minutes.", e);
-            }
-            String actualHash = sha256Hex(tempJar);
             // TODO This is disabled for now as hashes produced by the jar in CI don't match hashes from the downloaded file
+//            String expectedHash;
+//            try {
+//                expectedHash = fetchString(checksumUrl).split("\\s+")[0];
+//            } catch (FileNotFoundException e) {
+//                throw new IOException("Could not find the integrity checksum for " + targetJar.getName() + " ("
+//                        + checksumUrl + "). The release may still be publishing; please try again in a few minutes.", e);
+//            }
+//            String actualHash = sha256Hex(tempJar);
             // even though they are the same file.
 //            if (!expectedHash.equalsIgnoreCase(actualHash)) {
 //                throw new IOException("Downloaded " + targetJar.getName() + " failed SHA-256 verification. Expected "
