@@ -74,6 +74,16 @@ To run the installer in QA mode which uses a beta build of the Kraken client pas
 ./RuneLite.exe --qa
 ```
 
+To start the client logged in as a specific Jagex account, link your characters once with the Profiles plugin inside the
+client and then either pick the character from the launcher's "Character" drop down or pass its name on the command line:
+
+```shell
+./RuneLite.exe --kraken-profile RuneWraith
+```
+
+The drop down selection is remembered between launches, and `--kraken-profile` overrides it for that launch. Leaving the
+default entry selected uses whichever account the Jagex launcher last started RuneLite with.
+
 ### Automatic install
 
 The installer copies the launcher JAR into RuneLite's resources directory and updates `config.json` so RuneLite starts `com.kraken.launcher.Launcher`

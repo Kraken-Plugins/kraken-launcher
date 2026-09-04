@@ -3,17 +3,23 @@ package com.kraken.launcher.ui;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
+import com.kraken.launcher.KrakenProfiles;
 import com.kraken.launcher.Launcher;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.swing.*;
+import javax.swing.plaf.basic.BasicArrowButton;
+import javax.swing.plaf.basic.BasicComboBoxUI;
+import javax.swing.plaf.basic.BasicComboPopup;
+import javax.swing.plaf.basic.ComboPopup;
 import java.awt.*;
 import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.net.URL;
+import java.util.List;
 
 @Slf4j
 public class LauncherUI extends JFrame {
@@ -24,6 +30,7 @@ public class LauncherUI extends JFrame {
     public static final Color DARK_BG = Theme.DARK_BG;
     private static final Color CARD_BG = Theme.CARD_BG;
     private static final Color TEXT_COLOR = Theme.TEXT;
+    private static final String DEFAULT_PROFILE_LABEL = "Jagex Launcher (default)";
 
     @Getter
     private final LauncherPreferences preferences;
@@ -31,12 +38,20 @@ public class LauncherUI extends JFrame {
     private JCheckBox runeliteModeCheckbox;
     private JCheckBox skipUpdateCheckbox;
     private JCheckBox skipLauncherCheckbox;
+    private JComboBox<String> profileComboBox;
     private JTextField proxyTextField;
     private final Gson gson;
 
-    public LauncherUI(boolean qaBootstrap) {
+    /**
+     * @param qaBootstrap True to use the QA bootstrap.
+     * @param cliProfile Profile name passed with --kraken-profile, which overrides the saved selection, or null.
+     */
+    public LauncherUI(boolean qaBootstrap, String cliProfile) {
         this.gson = new GsonBuilder().setPrettyPrinting().create();
         this.preferences = loadPreferences();
+        if (cliProfile != null) {
+            preferences.setKrakenProfile(cliProfile);
+        }
 
         setTitle("Kraken Launcher");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -116,13 +131,19 @@ public class LauncherUI extends JFrame {
                         "or set 'skipLauncher' to false in: ~/.runelite/kraken/krakenprefs.json</html>"
         );
 
-        JLabel proxyLabel = new JLabel("Proxy (SOCKS5):");
-        proxyLabel.setForeground(TEXT_COLOR);
-        proxyLabel.setFont(new Font("Arial", Font.PLAIN, 13));
-        proxyLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JLabel profileLabel = createStyledLabel("Character:");
+        profileComboBox = createStyledComboBox(KrakenProfiles.names());
+        profileComboBox.setToolTipText(
+                "<html>Jagex account to log the client in with.<br>" +
+                        "Link accounts with the Profiles plugin inside the client.<br>" +
+                        "The default uses whichever account the Jagex launcher last used.</html>"
+        );
+
+        JLabel proxyLabel = createStyledLabel("Proxy (SOCKS5):");
 
         proxyTextField = new JTextField();
         proxyTextField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 35));
+        proxyTextField.setAlignmentX(Component.LEFT_ALIGNMENT);
         proxyTextField.setPreferredSize(new Dimension(300, 35));
         proxyTextField.setBackground(DARK_BG);
         proxyTextField.setForeground(TEXT_COLOR);
@@ -139,6 +160,10 @@ public class LauncherUI extends JFrame {
         optionsPanel.add(skipUpdateCheckbox);
         optionsPanel.add(Box.createVerticalStrut(15));
         optionsPanel.add(skipLauncherCheckbox);
+        optionsPanel.add(Box.createVerticalStrut(20));
+        optionsPanel.add(profileLabel);
+        optionsPanel.add(Box.createVerticalStrut(8));
+        optionsPanel.add(profileComboBox);
         optionsPanel.add(Box.createVerticalStrut(20));
         optionsPanel.add(proxyLabel);
         optionsPanel.add(Box.createVerticalStrut(8));
@@ -166,6 +191,68 @@ public class LauncherUI extends JFrame {
         mainPanel.add(buttonsPanel, BorderLayout.SOUTH);
 
         add(mainPanel);
+    }
+
+    private JLabel createStyledLabel(String text) {
+        JLabel label = new JLabel(text);
+        label.setForeground(TEXT_COLOR);
+        label.setFont(new Font("Arial", Font.PLAIN, 13));
+        label.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return label;
+    }
+
+    /**
+     * Builds the character picker: the default entry followed by every linked Jagex profile, drawn with the same
+     * dark background and green border as the proxy field so it does not pick up the system look and feel.
+     */
+    private JComboBox<String> createStyledComboBox(List<String> profiles) {
+        JComboBox<String> comboBox = new JComboBox<>();
+        comboBox.addItem(DEFAULT_PROFILE_LABEL);
+        profiles.forEach(comboBox::addItem);
+
+        comboBox.setMaximumSize(new Dimension(Integer.MAX_VALUE, 35));
+        comboBox.setAlignmentX(Component.LEFT_ALIGNMENT);
+        comboBox.setPreferredSize(new Dimension(300, 35));
+        comboBox.setBackground(DARK_BG);
+        comboBox.setForeground(TEXT_COLOR);
+        comboBox.setFont(new Font("Arial", Font.PLAIN, 13));
+        comboBox.setFocusable(false);
+        comboBox.setOpaque(true);
+        comboBox.setBorder(BorderFactory.createLineBorder(PRIMARY_GREEN.darker(), 1));
+        comboBox.setUI(new BasicComboBoxUI() {
+            @Override
+            protected JButton createArrowButton() {
+                JButton arrow = new BasicArrowButton(BasicArrowButton.SOUTH, DARK_BG, DARK_BG, PRIMARY_GREEN, DARK_BG);
+                arrow.setBorder(BorderFactory.createEmptyBorder());
+                return arrow;
+            }
+
+            // The base UI fills the selected value area with the look and feel's ComboBox.background (white on
+            // Windows) rather than the component background, so paint it with the theme colour instead.
+            @Override
+            public void paintCurrentValueBackground(Graphics g, Rectangle bounds, boolean hasFocus) {
+                g.setColor(DARK_BG);
+                g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+            }
+
+            @Override
+            protected ComboPopup createPopup() {
+                BasicComboPopup popup = new BasicComboPopup(comboBox);
+                popup.setBorder(BorderFactory.createLineBorder(PRIMARY_GREEN.darker(), 1));
+                return popup;
+            }
+        });
+        comboBox.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
+                JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                label.setBackground(isSelected ? PRIMARY_GREEN.darker() : DARK_BG);
+                label.setForeground(TEXT_COLOR);
+                label.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
+                return label;
+            }
+        });
+        return comboBox;
     }
 
     private JCheckBox createStyledCheckbox(String text) {
@@ -239,6 +326,7 @@ public class LauncherUI extends JFrame {
         preferences.setSkipUpdateCheck(skipUpdateCheckbox.isSelected());
         preferences.setSkipLauncher(skipLauncherCheckbox.isSelected());
         preferences.setProxy(proxyTextField.getText().trim());
+        preferences.setKrakenProfile(profileComboBox.getSelectedIndex() <= 0 ? "" : (String) profileComboBox.getSelectedItem());
         savePreferences();
     }
 
@@ -247,6 +335,24 @@ public class LauncherUI extends JFrame {
         skipUpdateCheckbox.setSelected(preferences.isSkipUpdateCheck());
         skipLauncherCheckbox.setSelected(preferences.isSkipLauncher());
         proxyTextField.setText(preferences.getProxy() != null ? preferences.getProxy() : "");
+        selectProfile(preferences.getKrakenProfile());
+    }
+
+    /**
+     * Selects the saved profile in the picker, falling back to the default entry when it is blank or no longer linked.
+     */
+    private void selectProfile(String name) {
+        profileComboBox.setSelectedIndex(0);
+        if (name == null || name.trim().isEmpty()) {
+            return;
+        }
+        for (int i = 1; i < profileComboBox.getItemCount(); i++) {
+            if (profileComboBox.getItemAt(i).equalsIgnoreCase(name.trim())) {
+                profileComboBox.setSelectedIndex(i);
+                return;
+            }
+        }
+        log.warn("Linked profile '{}' was not found in {}. Using the default credentials.", name, KrakenProfiles.PROFILES_FILE);
     }
 
     private LauncherPreferences loadPreferences() {

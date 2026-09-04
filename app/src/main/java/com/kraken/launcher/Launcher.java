@@ -88,9 +88,10 @@ public class Launcher {
         boolean forceShowUI = Arrays.asList(args).contains("--force-ui");
         boolean configure = Arrays.asList(args).contains("--configure");
         boolean qaBootstrap = Arrays.asList(args).contains("--qa");
+        String cliProfile = KrakenProfiles.fromArgs(args);
 
         SwingUtilities.invokeLater(() -> {
-            LauncherUI gui = new LauncherUI(qaBootstrap);
+            LauncherUI gui = new LauncherUI(qaBootstrap, cliProfile);
 
             if(configure) {
                 gui.onStartClicked(true, qaBootstrap);
@@ -184,6 +185,10 @@ public class Launcher {
         if (proxy != null && !proxy.isEmpty()) {
             configureProxy(proxy);
         }
+
+        // Point the client at the selected linked Jagex profile before it starts. This also applies in RuneLite Mode
+        // since the vanilla client reads the same credentials property.
+        KrakenProfiles.activate(preferences.getKrakenProfile());
 
         try {
             // When running from the IDE, the RuneLite.jar is not on the classpath, so it must be dynamically found and added to resolve

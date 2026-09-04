@@ -14,7 +14,7 @@ Version comes from the `VERSION` env var (defaults to `1.0.0`) and is filtered i
 
 There are currently no tests (`app/src/test` is empty); `./gradlew test` is a no-op. CI (`.github/workflows/release.yml`) builds on push to master, versions as `1.0.<run_number>`, tags, uploads the fat jar as `KrakenSetup.jar` and a zipped exe+JRE bundle to MinIO, and cuts a GitHub release.
 
-Runtime CLI flags (passed through `RuneLite.exe`, e.g. `./RuneLite.exe --qa`): `--qa` (beta bootstrap), `--force-ui`, `--configure`.
+Runtime CLI flags (passed through `RuneLite.exe`, e.g. `./RuneLite.exe --qa`): `--qa` (beta bootstrap), `--force-ui`, `--configure`, `--kraken-profile <name>` (log in as a Jagex account linked through the Profiles plugin; see `KrakenProfiles`).
 
 Useful paths on a dev machine:
 - Logs: `~/.runelite/kraken/logs/launcher.log`
