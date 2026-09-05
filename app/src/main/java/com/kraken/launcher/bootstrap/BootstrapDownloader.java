@@ -18,6 +18,7 @@ import java.net.URLConnection;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -58,9 +59,28 @@ public class BootstrapDownloader {
         return bootstrap != null ? gson.fromJson(bootstrap, Bootstrap.class) : null;
     }
 
+    /**
+     * Downloads and verifies the Kraken bootstrap. The bootstrap names the jars the launcher loads as a
+     * {@code -javaagent}, so it is only trusted after its detached Ed25519 signature ({@code bootstrap.json.sig})
+     * checks out against the pinned public key. A missing or invalid signature fails closed: the bootstrap is
+     * left null and an exception is thrown so the launcher refuses to start rather than load unverified code.
+     */
     public void downloadKrakenBootstrap() throws IOException {
+        if (krakenBootstrap != null) return;
+
         log.info("Downloading Kraken Bootstrap from URL: {}", this.krakenBootstrapUrl);
-        krakenBootstrap = downloadBootstrap(this.krakenBootstrapUrl, krakenBootstrap);
+        byte[] bootstrapBytes = fetchBootstrapBytes(this.krakenBootstrapUrl);
+        if (bootstrapBytes == null) {
+            return;
+        }
+
+        String signature = fetchBootstrap(this.krakenBootstrapUrl + ".sig");
+        if (!BootstrapVerifier.verify(bootstrapBytes, signature)) {
+            throw new IOException("Kraken bootstrap signature verification failed; refusing to trust the bootstrap.");
+        }
+
+        krakenBootstrap = gson.fromJson(new String(bootstrapBytes, StandardCharsets.UTF_8), Bootstrap.class);
+        log.info("Kraken bootstrap signature verified against the pinned public key.");
     }
 
     public void downloadRuneLiteBootstrap() throws IOException {
@@ -78,6 +98,29 @@ public class BootstrapDownloader {
             HttpResponse<String> resp = httpClient.send(bootstrapReq, HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() != 200) {
                 throw new IOException("Unable to download bootstrap (status " + resp.statusCode() + "): " + resp.body());
+            }
+            return resp.body();
+        } catch (InterruptedException e) {
+            log.error("Failed to get bootstrap json file: ", e);
+            return null;
+        }
+    }
+
+    /**
+     * Fetches a bootstrap as raw bytes so the exact signed content can be verified byte-for-byte before it is
+     * parsed. Parsing and re-serializing would not reproduce the signed bytes, so signature checks must run
+     * against these bytes rather than a round-tripped object.
+     */
+    private byte[] fetchBootstrapBytes(String url) throws IOException {
+        HttpRequest bootstrapReq = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
+                .GET()
+                .build();
+        try {
+            HttpResponse<byte[]> resp = httpClient.send(bootstrapReq, HttpResponse.BodyHandlers.ofByteArray());
+            if (resp.statusCode() != 200) {
+                throw new IOException("Unable to download bootstrap (status " + resp.statusCode() + ")");
             }
             return resp.body();
         } catch (InterruptedException e) {

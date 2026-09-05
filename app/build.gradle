@@ -26,6 +26,10 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("com.google.guava:guava:31.1-jre")
 
+    // Ed25519 verification of the signed bootstrap. JDK 11 has no built-in EdDSA, and this must stay a
+    // system-classloader dependency (it verifies before the -javaagent trusts any downloaded jar).
+    implementation("net.i2p.crypto:eddsa:0.3.0")
+
     // Required since these need to use system classloader so they can't be included
     // dynamically in the bootstrap.
     implementation("net.bytebuddy:byte-buddy:1.18.4")
