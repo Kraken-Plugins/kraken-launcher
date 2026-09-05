@@ -691,7 +691,7 @@ public class Launcher {
         } catch (InaccessibleObjectException e) {
             log.warn("java.net is closed to this module, opening it through instrumentation. JVM arguments: {}",
                     ManagementFactory.getRuntimeMXBean().getInputArguments());
-            openJavaNetPackage();
+            openJavaBasePackage("java.net");
             addUrl.setAccessible(true);
         }
 
@@ -699,30 +699,31 @@ public class Launcher {
     }
 
     /**
-     * Opens java.base/java.net to this class loader's unnamed module so URLClassLoader.addURL can be
-     * made accessible. Java 16 and above enforce strong encapsulation, which blocks the reflective
-     * access unless the JVM was started with --add-opens or the package is opened through instrumentation.
+     * Opens a java.base package to this class's unnamed module so its private members can be made accessible
+     * reflectively (URLClassLoader.addURL in java.net, the process environment maps in java.lang and java.util).
+     * Java 16 and above enforce strong encapsulation, which blocks the reflective access unless the JVM was
+     * started with --add-opens or the package is opened through instrumentation.
      */
-    private static void openJavaNetPackage() {
+    static void openJavaBasePackage(String packageName) {
         Instrumentation instrumentation;
 
         try {
             instrumentation = getInstrumentation();
         } catch (IllegalStateException e) {
-            throw new IllegalStateException("Unable to open java.base/java.net because the Java agent is not " +
-                    "installed. Re-run the Kraken installer so --add-opens=java.base/java.net=ALL-UNNAMED is added " +
-                    "to the RuneLite config.json vmArgs.", e);
+            throw new IllegalStateException("Unable to open java.base/" + packageName + " because the Java agent is " +
+                    "not installed. Re-run the Kraken installer so the --add-opens flags are added to the RuneLite " +
+                    "config.json vmArgs.", e);
         }
 
         Module javaBase = URLClassLoader.class.getModule();
         Module target = Launcher.class.getModule();
 
-        log.info("Opening java.base/java.net to {} via instrumentation", target);
+        log.info("Opening java.base/{} to {} via instrumentation", packageName, target);
         instrumentation.redefineModule(
                 javaBase,
                 Collections.emptySet(),
                 Collections.emptyMap(),
-                Collections.singletonMap("java.net", Collections.singleton(target)),
+                Collections.singletonMap(packageName, Collections.singleton(target)),
                 Collections.emptySet(),
                 Collections.emptyMap()
         );

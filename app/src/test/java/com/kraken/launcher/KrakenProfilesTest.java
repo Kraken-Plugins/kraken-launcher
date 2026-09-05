@@ -7,7 +7,9 @@ import org.junit.rules.TemporaryFolder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
@@ -45,6 +47,17 @@ public class KrakenProfilesTest {
         Path corrupt = tmp.newFile("corrupt.txt").toPath();
         Files.write(corrupt, "not a profiles file".getBytes(StandardCharsets.UTF_8));
         assertTrue(KrakenProfiles.load(corrupt).isEmpty());
+    }
+
+    @Test
+    public void replacesEnvironmentVariablesSeenByTheClient() throws Exception {
+        Map<String, String> vars = new HashMap<>();
+        vars.put("JX_DISPLAY_NAME", "BronzeWraith");
+
+        KrakenProfiles.putEnv(vars);
+
+        assertEquals("BronzeWraith", System.getenv("JX_DISPLAY_NAME"));
+        assertEquals("BronzeWraith", System.getenv().get("JX_DISPLAY_NAME"));
     }
 
     @Test

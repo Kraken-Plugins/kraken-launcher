@@ -11,6 +11,8 @@ import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.InaccessibleObjectException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,7 +20,9 @@ import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.stream.Collectors;
 
@@ -27,11 +31,12 @@ import java.util.stream.Collectors;
  * as one of them. The plugin stores profiles as an AES encrypted JSON array; the key and layout here must stay in
  * sync with ProfileStore in the Profiles plugin.
  * <p>
- * Activating a profile writes a RuneLite credentials file for it and points the client at that file through the
- * runelite.credentials.path system property, which the injected client resolves relative to the RuneLite directory.
- * Environment variables set by the Jagex launcher still take precedence inside the client, so the selection only
- * has an effect when RuneLite is started directly. Legacy username/password profiles cannot be expressed as
- * credentials and are ignored.
+ * The client takes its Jagex session from the JX_* environment variables, which the Jagex launcher sets, and only
+ * falls back to a credentials file when they are absent. Activating a profile therefore replaces those variables in
+ * this JVM's copy of the environment so the selection wins even when RuneLite was started from the Jagex launcher.
+ * If that reflective access is unavailable the profile is written to a credentials file that the client is pointed
+ * at through the runelite.credentials.path system property, which only takes effect without a Jagex launcher
+ * session. Legacy username/password profiles cannot be expressed as credentials and are ignored.
  */
 @Slf4j
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
@@ -48,6 +53,8 @@ public final class KrakenProfiles {
 
     /**
      * Returns the value following --kraken-profile, or null when the flag is absent or has no value.
+     * @param args Arguments
+     * @return Kraken profile value or null if absent.
      */
     public static String fromArgs(String[] args) {
         for (int i = 0; i < args.length - 1; i++) {
@@ -60,6 +67,7 @@ public final class KrakenProfiles {
 
     /**
      * Names of the linked Jagex profiles. Empty when nothing is linked or the file cannot be read.
+     * @return List of names for the profiles.
      */
     public static List<String> names() {
         return load(PROFILES_FILE).stream().map(p -> p.identifier).collect(Collectors.toList());
@@ -68,6 +76,7 @@ public final class KrakenProfiles {
     /**
      * Makes RuneLite log in as the named profile. A blank or unknown name leaves the client on its default
      * credentials so the launcher keeps working when nothing is linked.
+     * @param identifier The profile identifier
      */
     public static void activate(String identifier) {
         if (identifier == null || identifier.trim().isEmpty()) {
@@ -85,12 +94,63 @@ public final class KrakenProfiles {
             return;
         }
 
+        Map<String, String> vars = new LinkedHashMap<>();
+        vars.put("JX_SESSION_ID", orEmpty(profile.sessionId));
+        vars.put("JX_CHARACTER_ID", orEmpty(profile.characterId));
+        vars.put("JX_DISPLAY_NAME", orEmpty(profile.characterName));
+        vars.put("JX_ACCESS_TOKEN", "");
+        vars.put("JX_REFRESH_TOKEN", "");
+
+        try {
+            putEnv(vars);
+        } catch (Exception e) {
+            log.warn("Could not replace the JX_* environment variables, falling back to a credentials file. The file " +
+                    "cannot override an account chosen in the Jagex launcher.", e);
+            if (!writeCredentialsFile(vars)) {
+                return;
+            }
+        }
+
+        log.info("Starting RuneLite as Kraken profile '{}' ({})", profile.identifier, profile.characterName);
+    }
+
+    /**
+     * Replaces entries in this JVM's copy of the process environment, which is what the client consults first. The
+     * maps behind System.getenv() are private to java.lang and java.util, so those packages are opened through the
+     * launcher's instrumentation agent when strong encapsulation blocks the access.
+     */
+    @SuppressWarnings("unchecked")
+    static void putEnv(Map<String, String> vars) throws ReflectiveOperationException {
+        Class<?> processEnvironment = Class.forName("java.lang.ProcessEnvironment");
+        Object unmodifiable = fieldValue(processEnvironment, "theUnmodifiableEnvironment", null, "java.lang");
+        Map<String, String> env = (Map<String, String>) fieldValue(
+                Class.forName("java.util.Collections$UnmodifiableMap"), "m", unmodifiable, "java.util");
+        env.putAll(vars);
+
+        try {
+            // Windows keeps a second, case-insensitive copy that backs System.getenv(String)
+            Map<String, String> caseInsensitive = (Map<String, String>) fieldValue(
+                    processEnvironment, "theCaseInsensitiveEnvironment", null, "java.lang");
+            caseInsensitive.putAll(vars);
+        } catch (NoSuchFieldException e) {
+            log.debug("No case-insensitive environment map on this platform");
+        }
+    }
+
+    private static Object fieldValue(Class<?> type, String name, Object instance, String packageName) throws ReflectiveOperationException {
+        Field field = type.getDeclaredField(name);
+        try {
+            field.setAccessible(true);
+        } catch (InaccessibleObjectException e) {
+            Launcher.openJavaBasePackage(packageName);
+            field.setAccessible(true);
+        }
+        return field.get(instance);
+    }
+
+    private static boolean writeCredentialsFile(Map<String, String> vars) {
         Properties props = new Properties();
-        props.setProperty("JX_SESSION_ID", orEmpty(profile.sessionId));
-        props.setProperty("JX_CHARACTER_ID", orEmpty(profile.characterId));
-        props.setProperty("JX_DISPLAY_NAME", orEmpty(profile.characterName));
-        props.setProperty("JX_ACCESS_TOKEN", "");
-        props.setProperty("JX_REFRESH_TOKEN", "");
+        props.putAll(vars);
 
         Path file = RUNELITE_DIR.resolve(CREDENTIALS_PATH);
         try {
@@ -99,12 +159,12 @@ public final class KrakenProfiles {
                 props.store(out, "Do not share this file with anyone");
             }
         } catch (IOException e) {
-            log.error("Failed to write credentials for profile '{}' to {}. Starting with the default credentials.", wanted, file, e);
-            return;
+            log.error("Failed to write credentials to {}. Starting with the default credentials.", file, e);
+            return false;
         }
 
         System.setProperty(CREDENTIALS_PATH_PROPERTY, CREDENTIALS_PATH);
-        log.info("Starting RuneLite as Kraken profile '{}' ({})", profile.identifier, profile.characterName);
+        return true;
     }
 
     /**

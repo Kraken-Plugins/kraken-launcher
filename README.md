@@ -81,8 +81,9 @@ client and then either pick the character from the launcher's "Character" drop d
 ./RuneLite.exe --kraken-profile RuneWraith
 ```
 
-The drop down selection is remembered between launches, and `--kraken-profile` overrides it for that launch. Leaving the
-default entry selected uses whichever account the Jagex launcher last started RuneLite with.
+The drop down selection is remembered between launches, and `--kraken-profile` overrides it for that launch. The selection
+also applies when RuneLite was started from the Jagex launcher, replacing the account chosen there. Leaving the default
+entry selected uses whichever account the Jagex launcher last started RuneLite with.
 
 ### Automatic install
 

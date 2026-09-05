@@ -40,9 +40,12 @@ public class ClientWatcher {
      *
      * <p>During the splash screen wait period, the thread sleeps for a fixed interval, bounded by an overall
      * timeout so a splash screen that never closes does not spin forever. Once the splash screen closes (or the
-     * timeout elapses), the Kraken loader plugin is loaded, enabled, and started using the provided
-     * {@link PluginManager}. If the plugin has already been auto-started by RuneLite, it is stopped and restarted
-     * to prevent inconsistent states.
+     * timeout elapses), the Kraken loader plugin is enabled and started using the provided {@link PluginManager}.
+     * When the Kraken jar reached RuneLite's class loader before its core plugin scan, RuneLite has already
+     * instantiated the loader plugin and that instance is reused; loading a second one would give RuneLite two
+     * plugins named "Kraken Plugins", which it treats as conflicting and disables through the shared config key,
+     * so the loader would never start. If the plugin has already been auto-started by RuneLite, it is stopped and
+     * restarted to prevent inconsistent states.
      *
      * @param krakenLoaderPlugin The {@link Class} object representing the Kraken loader plugin to be
      *                           loaded and started. This must not be {@code null}.
@@ -70,13 +73,21 @@ public class ClientWatcher {
                 try {
                     // It is critical that loadPlugins and startPlugin run on the EDT
                     // to avoid racing with RuneLite's Config/Profile manager.
-                    List<Plugin> loadedPlugins = pluginManager.loadPlugins(Collections.singletonList(krakenLoaderPlugin), null);
-                    if (loadedPlugins.isEmpty()) {
-                        log.error("PluginManager failed to load Kraken plugin (returned empty list)");
-                        return;
-                    }
+                    Plugin krakenClient = pluginManager.getPlugins().stream()
+                            .filter(plugin -> plugin.getClass() == krakenLoaderPlugin)
+                            .findFirst()
+                            .orElse(null);
 
-                    Plugin krakenClient = loadedPlugins.get(0);
+                    if (krakenClient != null) {
+                        log.info("RuneLite already loaded the Kraken loader plugin during its core plugin scan, reusing that instance.");
+                    } else {
+                        List<Plugin> loadedPlugins = pluginManager.loadPlugins(Collections.singletonList(krakenLoaderPlugin), null);
+                        if (loadedPlugins.isEmpty()) {
+                            log.error("PluginManager failed to load Kraken plugin (returned empty list)");
+                            return;
+                        }
+                        krakenClient = loadedPlugins.get(0);
+                    }
 
                     // Check if RuneLite auto-started this plugin from config
                     if (pluginManager.isPluginActive(krakenClient)) {
