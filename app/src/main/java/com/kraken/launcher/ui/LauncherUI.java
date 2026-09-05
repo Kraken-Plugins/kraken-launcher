@@ -38,6 +38,7 @@ public class LauncherUI extends JFrame {
     private JCheckBox runeliteModeCheckbox;
     private JCheckBox skipUpdateCheckbox;
     private JCheckBox skipLauncherCheckbox;
+    private JCheckBox shareLogsCheckbox;
     private JComboBox<String> profileComboBox;
     private JTextField proxyTextField;
     private final Gson gson;
@@ -131,6 +132,14 @@ public class LauncherUI extends JFrame {
                         "or set 'skipLauncher' to false in: ~/.runelite/kraken/krakenprefs.json</html>"
         );
 
+        shareLogsCheckbox = createStyledCheckbox("Share Error Logs");
+        shareLogsCheckbox.setToolTipText(
+                "<html>Off by default. Only when the client logs an error or stack trace, the end of<br>" +
+                        "~/.runelite/logs/client.log and ~/.runelite/kraken/logs/launcher.log is sent to Kraken,<br>" +
+                        "linked to your Discord account, so the bug can be fixed. Logs may include your in-game name.<br>" +
+                        "Nothing is sent otherwise.</html>"
+        );
+
         JLabel profileLabel = createStyledLabel("Character:");
         profileComboBox = createStyledComboBox(KrakenProfiles.names());
         profileComboBox.setToolTipText(
@@ -160,6 +169,8 @@ public class LauncherUI extends JFrame {
         optionsPanel.add(skipUpdateCheckbox);
         optionsPanel.add(Box.createVerticalStrut(15));
         optionsPanel.add(skipLauncherCheckbox);
+        optionsPanel.add(Box.createVerticalStrut(15));
+        optionsPanel.add(shareLogsCheckbox);
         optionsPanel.add(Box.createVerticalStrut(20));
         optionsPanel.add(profileLabel);
         optionsPanel.add(Box.createVerticalStrut(8));
@@ -325,6 +336,7 @@ public class LauncherUI extends JFrame {
         preferences.setRuneliteMode(runeliteModeCheckbox.isSelected());
         preferences.setSkipUpdateCheck(skipUpdateCheckbox.isSelected());
         preferences.setSkipLauncher(skipLauncherCheckbox.isSelected());
+        preferences.setShareLogs(shareLogsCheckbox.isSelected());
         preferences.setProxy(proxyTextField.getText().trim());
         preferences.setKrakenProfile(profileComboBox.getSelectedIndex() <= 0 ? "" : (String) profileComboBox.getSelectedItem());
         savePreferences();
@@ -334,6 +346,7 @@ public class LauncherUI extends JFrame {
         runeliteModeCheckbox.setSelected(preferences.isRuneliteMode());
         skipUpdateCheckbox.setSelected(preferences.isSkipUpdateCheck());
         skipLauncherCheckbox.setSelected(preferences.isSkipLauncher());
+        shareLogsCheckbox.setSelected(preferences.isShareLogs());
         proxyTextField.setText(preferences.getProxy() != null ? preferences.getProxy() : "");
         selectProfile(preferences.getKrakenProfile());
     }

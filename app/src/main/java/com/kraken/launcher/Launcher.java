@@ -163,7 +163,12 @@ public class Launcher {
         // Set proxy system property if specified
         if (preferences.getProxy() != null && !preferences.getProxy().isEmpty()) {
             System.setProperty("kraken.proxy", preferences.getProxy());
-            log.info("Proxy configured: {}", preferences.getProxy());
+            log.info("Proxy configured");
+        }
+
+        if (preferences.isShareLogs()) {
+            System.setProperty("kraken.share-logs", "true");
+            log.info("Error log sharing enabled");
         }
 
         Launcher launcher = new Launcher(new BootstrapDownloader(qa));
@@ -426,7 +431,7 @@ public class Launcher {
                 }
             });
 
-            log.info("SOCKS5 authentication configured for user: {}", spec.user);
+            log.info("SOCKS5 authentication configured");
         } else {
             log.info("SOCKS5 proxy configured without authentication");
         }
