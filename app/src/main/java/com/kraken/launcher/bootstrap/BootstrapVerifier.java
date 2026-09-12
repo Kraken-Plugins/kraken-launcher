@@ -16,7 +16,7 @@ import java.util.Base64;
 /**
  * Verifies the detached Ed25519 signature over {@code bootstrap.json} before the launcher trusts any artifact
  * it names. The launcher installs the Kraken jar as a {@code -javaagent}, so an unverified bootstrap is a supply
- * chain hole: anyone able to write to the MinIO bucket, or to tamper with the download, could point the launcher
+ * chain hole: anyone able to write to the SeaweedFS bucket, or to tamper with the download, could point the launcher
  * at a malicious jar and gain full instrumentation access. Pinning the public key here makes CI's private key the
  * only trusted source.
  *

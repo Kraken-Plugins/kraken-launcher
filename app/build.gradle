@@ -92,7 +92,7 @@ shadowJar {
     }
 }
 
-// Writes app/build/libs/KrakenSetup.jar.sha256 - the SHA-256 of the fat jar. The fat jar is uploaded to MinIO as
+// Writes app/build/libs/KrakenSetup.jar.sha256 - the SHA-256 of the fat jar. The fat jar is uploaded to SeaweedFS as
 // KrakenSetup.jar (same bytes, just renamed), so this is exactly the checksum the .exe installer downloads to verify
 // the jar before installing it as a -javaagent. CI runs this task and uploads the file; run it locally to produce a
 // checksum you can upload for testing.

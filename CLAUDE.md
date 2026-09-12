@@ -12,7 +12,7 @@ java -jar app/build/libs/kraken-launcher-1.0.0-fat.jar   # runs the Installer GU
 
 Version comes from the `VERSION` env var (defaults to `1.0.0`) and is filtered into `kraken-version.properties` by `processResources`. Java 11 toolchain — do not use APIs above 11.
 
-There are currently no tests (`app/src/test` is empty); `./gradlew test` is a no-op. CI (`.github/workflows/release.yml`) builds on push to master, versions as `1.0.<run_number>`, tags, uploads the fat jar as `KrakenSetup.jar` and a zipped exe+JRE bundle to MinIO, and cuts a GitHub release.
+There are currently no tests (`app/src/test` is empty); `./gradlew test` is a no-op. CI (`.github/workflows/release.yml`) builds on push to master, versions as `1.0.<run_number>`, tags, uploads the fat jar as `KrakenSetup.jar` and a zipped exe+JRE bundle to SeaweedFS, and cuts a GitHub release.
 
 Runtime CLI flags (passed through `RuneLite.exe`, e.g. `./RuneLite.exe --qa`): `--qa` (beta bootstrap), `--force-ui`, `--configure`, `--kraken-profile <name>` (log in as a Jagex account linked through the Profiles plugin; see `KrakenProfiles`).
 
@@ -26,7 +26,7 @@ Useful paths on a dev machine:
 
 This jar has **two entry points** that run in completely different contexts:
 
-1. **`Installer`** — the fat jar's `Main-Class` and the launch4j `mainClassName`. A one-shot Swing GUI the user runs once. It copies itself (or downloads `KrakenSetup.jar` from MinIO when running as `.exe`) into the RuneLite directory, then rewrites `config.json`: `mainClass` → `com.kraken.launcher.Launcher`, `classPath` → `[RuneLite.jar, <jar>]`, and `vmArgs` → `-javaagent:<jar>` plus the `--add-opens`/`--add-exports` list. It also appends `--disable-telemetry` to `settings.json`, then marks both files read-only so RuneLite cannot revert them. `Uninstaller` reverses this and **must be kept in sync** with any `Installer` change.
+1. **`Installer`** — the fat jar's `Main-Class` and the launch4j `mainClassName`. A one-shot Swing GUI the user runs once. It copies itself (or downloads `KrakenSetup.jar` from SeaweedFS when running as `.exe`) into the RuneLite directory, then rewrites `config.json`: `mainClass` → `com.kraken.launcher.Launcher`, `classPath` → `[RuneLite.jar, <jar>]`, and `vmArgs` → `-javaagent:<jar>` plus the `--add-opens`/`--add-exports` list. It also appends `--disable-telemetry` to `settings.json`, then marks both files read-only so RuneLite cannot revert them. `Uninstaller` reverses this and **must be kept in sync** with any `Installer` change.
 
 2. **`Launcher`** — what RuneLite's native launcher actually starts after install. It runs the launcher UI, verifies bootstraps, hands control to `net.runelite.launcher.Launcher.main`, and injects Kraken artifacts on a background thread.
 
@@ -48,7 +48,7 @@ The one class that *does* compile against RuneLite (`ClientWatcher`, which uses 
 
 `Launcher.checkInjectedClientVersion` compares Kraken's bootstrap `hash` against RuneLite's `injected-client` artifact hash, and Kraken's `hookHash` against the `rlicn-*` artifact hash. Any mismatch means RuneLite shipped an unreviewed update and the launcher halts with a `FatalErrorDialog`. Users can bypass with "Skip Update Check" or run vanilla via "RuneLite Mode" (which skips `patch()` entirely). Both are `LauncherPreferences` flags persisted to `krakenprefs.json`.
 
-Bootstrap sources: `https://minio.kraken-plugins.com/kraken-bootstrap-static/bootstrap.json` (or `bootstrap-qa.json` with `--qa`) and `https://static.runelite.net/bootstrap.json`.
+Bootstrap sources: `https://seaweed.kraken-plugins.com/kraken-bootstrap-static/bootstrap.json` (or `bootstrap-qa.json` with `--qa`) and `https://static.runelite.net/bootstrap.json`.
 
 ## Conventions & gotchas
 

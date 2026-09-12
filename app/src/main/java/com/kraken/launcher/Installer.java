@@ -187,8 +187,8 @@ public class Installer {
         if (currentJar.getName().toLowerCase().endsWith(".exe")) {
             jarName = "KrakenSetup.jar";
             File targetJar = new File(targetDir, jarName);
-            String base = "https://minio.kraken-plugins.com/kraken-bootstrap-static/";
-            log.info("Running as .exe file, fetching JAR from MinIO: {}{}", base, jarName);
+            String base = "https://seaweed.kraken-plugins.com/kraken-bootstrap-static/";
+            log.info("Running as .exe file, fetching JAR from SeaweedFS: {}{}", base, jarName);
             downloadAndVerifyJar(new URL(base + jarName), new URL(base + jarName + ".sha256"), targetDir, targetJar);
             log.info("Successfully downloaded and verified: {} into: {}", jarName, targetJar.getAbsolutePath());
         } else {

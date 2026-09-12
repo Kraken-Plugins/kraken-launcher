@@ -27,7 +27,7 @@ import java.util.Locale;
 
 @Slf4j
 public class BootstrapDownloader {
-    private static final String KRAKEN_BOOTSTRAP_BASE = "https://minio.kraken-plugins.com/kraken-bootstrap-static/";
+    private static final String KRAKEN_BOOTSTRAP_BASE = "https://seaweed.kraken-plugins.com/kraken-bootstrap-static/";
     private static final String RUNELITE_BOOTSTRAP = "https://static.runelite.net/bootstrap.json";
     private static final int REQUEST_TIMEOUT_SECONDS = 20;
     private static final int ARTIFACT_CONNECT_TIMEOUT_MS = 10_000;

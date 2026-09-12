@@ -108,29 +108,29 @@ jobs:
             echo "Created and pushed tag: $TAG_NAME"
           fi
 
-      - name: Install MinIO Client
-        run: |
-          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /tmp/mc
-          chmod +x /tmp/mc
-          sudo mv /tmp/mc /usr/local/bin/mc
-          mc --version
-
-      - name: Configure MinIO Client
-        run: |
-          mc alias set s3 ${{ secrets.MINIO_URL }} ${{ secrets.MINIO_ACCESS_KEY }} ${{ secrets.MINIO_SECRET_KEY }}
-
-      - name: Upload to MinIO
+      - name: Upload to SeaweedFS
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.SEAWEED_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.SEAWEED_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+          # SeaweedFS's S3 gateway rejects the CRC32 trailer the AWS CLI adds by default.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          SEAWEED_URL: ${{ secrets.SEAWEED_URL }}
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
-          JAR_FILE=$(find app/build/libs -name "*-fat.jar" | head -n 1)          
+          JAR_FILE=$(find app/build/libs -name "*-fat.jar" | head -n 1)
           echo "Processing Version: $VERSION"
-          
-          mc cp "${{ env.DIST_FILE }}" "s3/kraken-bootstrap-static/KrakenLauncher-Windows.zip"
-          mc cp "$JAR_FILE" "s3/kraken-bootstrap-static/KrakenSetup.jar"
+
+          aws s3 cp "${{ env.DIST_FILE }}" \
+            "s3://kraken-bootstrap-static/KrakenLauncher-Windows.zip" --endpoint-url "$SEAWEED_URL"
+          aws s3 cp "$JAR_FILE" \
+            "s3://kraken-bootstrap-static/KrakenSetup.jar" --endpoint-url "$SEAWEED_URL"
 
           # Publish the SHA-256 (produced by the gradle 'sha256' task, the same mechanism used locally) next to the
           # jar so the .exe installer can verify the download before installing it as a -javaagent.
-          mc cp app/build/libs/KrakenSetup.jar.sha256 "s3/kraken-bootstrap-static/KrakenSetup.jar.sha256"
+          aws s3 cp app/build/libs/KrakenSetup.jar.sha256 \
+            "s3://kraken-bootstrap-static/KrakenSetup.jar.sha256" --endpoint-url "$SEAWEED_URL"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

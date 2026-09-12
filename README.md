@@ -168,7 +168,7 @@ The `ClientWatcher` is instantiated via the Guice injector and waits for the spl
 - [Gradle](https://gradle.org/) - Build tool
 - [Java](https://www.java.com/en/download/) - Programming language used for the launcher
 - [RuneLite](https://runelite.net/) - The base client for the launcher
-- [MinIO](https://min.io/) - Object storage for the bootstrap and release artifacts
+- [SeaweedFS](https://seaweedfs.com/) - Object storage for the bootstrap and release artifacts
 
 ## Contributing
 
