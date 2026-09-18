@@ -5,7 +5,6 @@ import com.kraken.launcher.bootstrap.model.Artifact;
 import com.kraken.launcher.bootstrap.model.Bootstrap;
 import com.kraken.launcher.ui.FatalErrorDialog;
 import com.kraken.launcher.ui.LauncherPreferences;
-import com.kraken.launcher.ui.LauncherUI;
 import com.kraken.launcher.util.Utils;
 import lombok.extern.slf4j.Slf4j;
 import net.bytebuddy.agent.ByteBuddyAgent;
@@ -45,6 +44,7 @@ public class Launcher {
     private static final long SHUTDOWN_TIMEOUT_SECONDS = 10;
     private static final String RUNELITE_PACKAGE = "net.runelite.client.rs";
     private static final String LAUNCHER_CLASS = "net.runelite.launcher.Launcher";
+    private static final String RUNELITE_FORK_ARG = "--classpath";
 
     private final ExecutorService executorService;
     private final BootstrapDownloader bootstrapDownloader; // Class internally caches the bootstrap files for both RuneLite and Kraken
@@ -60,16 +60,75 @@ public class Launcher {
         });
     }
 
+    /**
+     * Entry point for IDE runs and for installs whose config.json still names this class as mainClass, which
+     * installers built before the agent hook write. Such an install is migrated to the current config.json layout
+     * before RuneLite's launcher runs, so the client RuneLite forks in RuneLite Mode reads RuneLite's own mainClass
+     * and classPath. A launch that RuneLite's fork itself started (--classpath in the arguments) is handed straight to
+     * RuneLite's launcher.
+     */
     public static void main(String[] args) {
-        log.info("Starting Kraken Launcher");
-        logRuntimeEnvironment();
+        if (Arrays.asList(args).contains(RUNELITE_FORK_ARG)) {
+            log.info("Started by RuneLite's fork, handing over to RuneLite's launcher");
+            startRuneLite(args);
+            return;
+        }
 
+        log.info("Starting Kraken Launcher from its main class");
+        if (KrakenAgent.isLoadedAsAgent()) {
+            migrateLegacyConfig();
+        } else {
+            installAgentForIde();
+        }
+
+        String[] runeLiteArgs = KrakenStartup.beforeRuneLite(args);
+        if (runeLiteArgs != null) {
+            startRuneLite(runeLiteArgs);
+        }
+    }
+
+    /**
+     * Starts RuneLite's launcher in this JVM. RuneLite.jar is not on the IDE class path, so it is located in the
+     * RuneLite directory and appended to the system class loader first when needed.
+     */
+    private static void startRuneLite(String[] args) {
+        try {
+            Utils.injectRuneLiteLauncher();
+            Class.forName(LAUNCHER_CLASS).getMethod("main", String[].class).invoke(null, (Object) args);
+        } catch (Exception e) {
+            log.error("Failed to start RuneLite launcher", e);
+            System.exit(1);
+        }
+    }
+
+    /**
+     * Rewrites RuneLite's config.json from the layout older installers write to the current one. Failures are logged
+     * and the launch continues: Kraken mode works in either layout.
+     */
+    private static void migrateLegacyConfig() {
+        if (Utils.RUNELITE_DIR == null) {
+            return;
+        }
+
+        try {
+            String jar = new File(Launcher.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getName();
+            if (Installer.migrateConfigJson(new File(Utils.RUNELITE_DIR, "config.json"), jar, Utils.IS_MAC)) {
+                log.info("Migrated config.json to the agent-only layout");
+            }
+        } catch (Exception e) {
+            log.warn("Could not migrate config.json to the agent-only layout: ", e);
+        }
+    }
+
+    /**
+     * Installs ByteBuddy's agent into this JVM when it was not started with -javaagent, so java.base packages can
+     * still be opened through instrumentation.
+     */
+    private static void installAgentForIde() {
         try {
             Instrumentation inst = getInstrumentation();
             log.info("ByteBuddy Java Agent, installed successfully {}", inst);
         } catch (IllegalStateException e) {
-            // When running directly via IDE, this installs into the current jvm without the need
-            // for extra VM Args like "-javaagent:JarFileWithByteBuddyAgent.jar"
             try {
                 ByteBuddyAgent.install();
                 log.info("ByteBuddy Java Agent, installed successfully {}", getInstrumentation());
@@ -78,36 +137,6 @@ public class Launcher {
                         "Kraken dependency injection will be unavailable until the launcher is started with instrumentation.");
             }
         }
-
-        try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        } catch (Exception e) {
-            log.warn("Failed to set system look and feel: ", e);
-        }
-
-        boolean forceShowUI = Arrays.asList(args).contains("--force-ui");
-        boolean configure = Arrays.asList(args).contains("--configure");
-        boolean qaBootstrap = Arrays.asList(args).contains("--qa");
-        String cliProfile = KrakenProfiles.fromArgs(args);
-
-        SwingUtilities.invokeLater(() -> {
-            LauncherUI gui = new LauncherUI(qaBootstrap, cliProfile);
-
-            if(configure) {
-                gui.onStartClicked(true, qaBootstrap);
-                return;
-            }
-
-            if(forceShowUI) {
-                log.info("Force showing UI, --force-ui arg passed");
-                gui.setVisible(true);
-            } else if(gui.getPreferences().isSkipLauncher()) {
-                log.info("Skipping Kraken Launcher UI and starting RuneLite");
-                gui.onStartClicked(false, qaBootstrap);
-            } else {
-                gui.setVisible(true);
-            }
-        });
     }
 
 
@@ -117,7 +146,7 @@ public class Launcher {
      * when a bug report comes in. The reflective class path injection depends on java.base/java.net being
      * open, which any of the arguments and environment variables below can take away.
      */
-    private static void logRuntimeEnvironment() {
+    static void logRuntimeEnvironment() {
         try {
             log.info("Java: {} ({}), vendor: {}", System.getProperty("java.version"),
                     System.getProperty("java.runtime.version"), System.getProperty("java.vendor"));
@@ -151,16 +180,16 @@ public class Launcher {
     }
 
     /**
-     * Starts the launcher with preferences from the GUI
-     * @param preferences The preferences to use for the patching process.
-     * @param configure If true, the launcher will start in configure mode.
+     * Prepares this JVM for Kraken: RuneLite's launcher is told to start the client in-process, the Kraken and
+     * RuneLite bootstraps are verified, the injection thread is started, and the proxy and profile are applied.
+     * @param preferences The preferences chosen in the launcher UI
      * @param qa True if this should use the QA bootstrap
+     * @return False when the client must not start because a bootstrap could not be fetched or the safety check failed
      */
-    public static void startWithPreferences(LauncherPreferences preferences, boolean configure, boolean qa) {
+    static boolean prepareKraken(LauncherPreferences preferences, boolean qa) {
         System.setProperty("runelite.launcher.nojvm", "true");
         System.setProperty("runelite.launcher.reflect", "true");
 
-        // Set proxy system property if specified
         if (preferences.getProxy() != null && !preferences.getProxy().isEmpty()) {
             System.setProperty("kraken.proxy", preferences.getProxy());
             log.info("Proxy configured");
@@ -172,50 +201,24 @@ public class Launcher {
         }
 
         Launcher launcher = new Launcher(new BootstrapDownloader(qa));
-
-        // Skip launcher.start() if RuneLite mode is enabled
-        if (preferences.isRuneliteMode()) {
-            log.info("RuneLite mode enabled - skipping Kraken bootstrap");
-        } else {
-            if (!launcher.patch(preferences)) {
-                log.info("Kraken Launcher failed to start, see error messages above.");
-                return;
-            }
+        if (!launcher.patch(preferences)) {
+            log.info("Kraken Launcher failed to start, see error messages above.");
+            return false;
         }
 
-        // Apply the SOCKS proxy before RuneLite (and therefore the game client) opens any sockets, and in every
-        // mode including RuneLite Mode. The bootstrap downloads in patch() above deliberately run first so they use
-        // a direct connection rather than routing through a proxy that may only be reachable for game traffic.
+        // Apply the SOCKS proxy before RuneLite (and therefore the game client) opens any sockets. The bootstrap
+        // downloads in patch() above deliberately run first so they use a direct connection rather than routing
+        // through a proxy that may only be reachable for game traffic.
         String proxy = preferences.getProxy();
         if (proxy != null && !proxy.isEmpty()) {
             configureProxy(proxy);
         }
 
-        // Point the client at the selected linked Jagex profile before it starts. This also applies in RuneLite Mode
-        // since the vanilla client reads the same credentials property.
+        // Point the client at the selected linked Jagex profile before it starts.
         KrakenProfiles.activate(preferences.getKrakenProfile());
 
-        try {
-            // When running from the IDE, the RuneLite.jar is not on the classpath, so it must be dynamically found and added to resolve
-            // net.runelite.launcher.Launcher class. When running through Jagex launcher, the config.json file already specifies both RuneLite.jar and KrakenSetup.jar
-            // on the classpath, so additional injection is unnecessary and will be skipped.
-            Utils.injectRuneLiteLauncher();
-            Class<?> launcherClass = Class.forName(LAUNCHER_CLASS);
-            String[] args = new String[]{};
-
-            if(configure) {
-                log.info("Starting Launcher (Configure)");
-                args = new String[]{"--configure"};
-            }
-
-            launcherClass.getMethod("main", String[].class).invoke(null, (Object) args);
-        } catch (Exception e) {
-            log.error("Failed to start RuneLite launcher", e);
-            launcher.shutdown();
-            System.exit(1);
-        }
-
         Runtime.getRuntime().addShutdownHook(new Thread(launcher::shutdown, "com.kraken.launcher.shutdown"));
+        return true;
     }
 
     /**
@@ -393,8 +396,8 @@ public class Launcher {
     }
 
     /**
-     * Configures network traffic to be relayed through a provided SOCKS5 proxy. Applied once, before RuneLite
-     * starts, so it also covers RuneLite Mode.
+     * Configures network traffic to be relayed through a provided SOCKS5 proxy. Applied once in Kraken mode, before
+     * RuneLite starts the client.
      * @param proxyString The proxy string in the format host:port or host:port:user:pass. IPv6 hosts must be
      *                    wrapped in brackets, e.g. [::1]:1080. The password may contain colons; the host (unless
      *                    bracketed), port, and username may not.
@@ -592,7 +595,7 @@ public class Launcher {
      * Shows a single modal fatal-error dialog and blocks until it is created. The patching pipeline always runs off
      * the Event Dispatch Thread, so invokeAndWait is safe here.
      */
-    private static void showFatalError(String message) {
+    static void showFatalError(String message) {
         try {
             SwingUtilities.invokeAndWait(() -> new FatalErrorDialog(message).open());
         } catch (Exception e) {

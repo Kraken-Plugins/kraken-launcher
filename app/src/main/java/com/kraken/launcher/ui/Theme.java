@@ -16,4 +16,5 @@ public final class Theme {
     public static final Color TEXT = new Color(220, 220, 220);
     public static final Color PRIMARY_GREEN = new Color(0, 200, 83);
     public static final Color ACCENT_GREEN = new Color(0, 255, 140);
+    public static final Color DISABLED_TEXT = new Color(110, 110, 110);
 }

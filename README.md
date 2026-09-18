@@ -8,7 +8,7 @@
 <h3 align="center">Kraken Launcher</h3>
 
   <p align="center">
-   A custom RuneLite launcher that loads the Kraken client by rewriting RuneLite's startup config and adding the launcher JAR to the classpath.
+   A custom RuneLite launcher that loads the Kraken client by adding the launcher JAR to RuneLite's startup config as a Java agent.
   </p>
 </div>
 
@@ -24,7 +24,7 @@
 
 Kraken Launcher is a custom bootstrap loader designed to wrap and modify the official RuneLite client. It functions by intercepting the RuneLite startup process, patching the RuneLite `URLClassLoader`, and injecting custom, side-loaded plugins directly into the client's dependency graph. This project was inspired by [Arnuh's RuneLite Hijack repository](https://github.com/Arnuh/RuneLiteHijack/tree/master), which uses a similar system for loading custom plugins without modifying or forking RuneLite's launcher.
 
-This repository now also includes a local installer path that rewrites RuneLite's `config.json`, adds the launcher JAR to RuneLite's classpath, and starts the Kraken plugin through RuneLite's plugin system.
+This repository also includes an installer that adds the launcher JAR to RuneLite's `config.json` as a Java agent. The agent opens the Kraken launcher before RuneLite's own launcher runs, and the Kraken plugin is started through RuneLite's plugin system.
 
 > ⚠️ Disclaimer: This software injects the Kraken Client plugin and modifies RuneLite's classpath at runtime. 
 > Use at your own risk. The developers are not responsible for account bans or client instability caused by RuneLite updates.
@@ -34,7 +34,8 @@ This repository now also includes a local installer path that rewrites RuneLite'
 - Automated Bootstrap Management: Downloads and caches artifacts for both RuneLite and Kraken to ensure version compatibility.
 - Runtime Injection: Hooks into the RuneLite `URLClassLoader` to inject external JARs without modifying the physical RuneLite client or launcher files.
 - Safety Hash Checking: Verifies RuneLite's injected-client and rlicn artifacts against known safe hashes. If RuneLite pushes a silent update, the launcher halts to prevent detection or instability.
-- Local RuneLite install support: Updates RuneLite's `config.json` so the launcher jar is on the classpath and `com.kraken.launcher.Launcher` is the entry point.
+- Local RuneLite install support: Adds the launcher jar to RuneLite's `config.json` as a `-javaagent`, leaving RuneLite's own main class and classpath in place.
+- RuneLite Mode: Starts stock RuneLite. RuneLite forks its client into a separate process with no Kraken agent, plugins or classpath entries; the character picker and proxy are not applied.
 
 ## Installation & Usage
 
@@ -87,8 +88,9 @@ entry selected uses whichever account the Jagex launcher last started RuneLite w
 
 ### Automatic install
 
-The installer copies the launcher JAR into RuneLite's resources directory and updates `config.json` so RuneLite starts `com.kraken.launcher.Launcher`
-instead of the default launcher. This also adds a `-javaagent:` entry to the JVM args so that runtime bytecode modifications can be made to the client.
+The installer copies the launcher JAR into RuneLite's resources directory and adds it to the JVM args in `config.json` as a `-javaagent:`
+entry, together with the `--add-opens`/`--add-exports` flags the launcher needs. RuneLite's own `mainClass` and `classPath` are left in place.
+The agent shows the Kraken launcher at the start of RuneLite's launcher and, in Kraken mode, makes the runtime bytecode modifications to the client.
 
 > :warning: Note, attached java agent information is sent over the network to OSRS servers to on login. 
 
@@ -99,36 +101,18 @@ If you want to wire it up yourself, place the built jar in RuneLite's resources 
 - Windows: `%LOCALAPPDATA%\RuneLite\`
 - macOS: `/Applications/RuneLite.app/Contents/Resources/`
 
-Then edit RuneLite's `config.json` so it points at the launcher and includes the launcher jar on the classpath.
+Then edit RuneLite's `config.json` so the launcher jar is loaded as a Java agent. Keep RuneLite's own `mainClass` and `classPath`: RuneLite Mode relies on them to start a client without Kraken.
 
 Windows example:
 
 ```json
 {
-  "mainClass": "com.kraken.launcher.Launcher",
+  "mainClass": "net.runelite.launcher.Launcher",
   "classPath": [
-    "RuneLite.jar",
-    "kraken-launcher-1.0.0-fat.jar"
-  ],
-  "vmArgs": [
-    "-javaagent:kraken-launcher-1.0.0-fat.jar"
-  ]
-}
-```
-
-macOS example:
-
-```json
-{
-  "mainClass": "com.kraken.launcher.Launcher",
-  "classPath": [
-    "RuneLite.jar",
-    "kraken-launcher-1.0.0-fat.jar"
+    "RuneLite.jar"
   ],
   "vmArgs": [
     "-javaagent:kraken-launcher-1.0.0-fat.jar",
-    "--add-opens=java.desktop/com.apple.eawt=ALL-UNNAMED",
-    "--add-exports=java.desktop/com.apple.eawt=ALL-UNNAMED",
     "--add-opens=java.base/java.net=ALL-UNNAMED",
     "--add-exports=java.base/java.net=ALL-UNNAMED",
     "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
@@ -141,7 +125,33 @@ macOS example:
 }
 ```
 
+macOS example:
+
+```json
+{
+  "mainClass": "net.runelite.launcher.Launcher",
+  "classPath": [
+    "RuneLite.jar"
+  ],
+  "vmArgs": [
+    "-javaagent:kraken-launcher-1.0.0-fat.jar",
+    "--add-opens=java.base/java.net=ALL-UNNAMED",
+    "--add-exports=java.base/java.net=ALL-UNNAMED",
+    "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+    "--add-exports=java.base/java.lang.reflect=ALL-UNNAMED",
+    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+    "--add-exports=java.base/java.lang=ALL-UNNAMED",
+    "--add-opens=java.base/jdk.internal.reflect=ALL-UNNAMED",
+    "--add-exports=java.base/jdk.internal.reflect=ALL-UNNAMED",
+    "--add-opens=java.desktop/com.apple.eawt=ALL-UNNAMED",
+    "--add-exports=java.desktop/com.apple.eawt=ALL-UNNAMED"
+  ]
+}
+```
+
 Preserve any existing RuneLite `vmArgs` that you still need, but remove any older `-javaagent:` entry for the launcher before adding the new one.
+
+Make `config.json` read-only afterwards, otherwise RuneLite replaces `vmArgs` with its own on the next launch and drops the agent.
 
 ### Windows executable
 
@@ -157,7 +167,11 @@ To run the executable with the bundled runtime behavior used by releases, keep a
 
 ## Architecture & How It Works
 
-The launcher operates by hijacking the standard Java startup process. Bootstrap resolution contacts the Kraken server to get the manifest of required artifacts, downloads RuneLite's bootstrap, and compares the SHA-256 hashes of the gamepack and injection hooks against Kraken's allowed list. The launcher then patches RuneLite's classpath so it can add custom dependencies after the launcher has started but before the client starts.
+The installer loads the launcher JAR into RuneLite's launcher JVM as a Java agent. Its `premain` hooks the start of RuneLite's `net.runelite.launcher.Launcher.main`, so the Kraken launcher UI runs with RuneLite's program arguments before RuneLite's launcher does anything.
+
+In Kraken mode, bootstrap resolution contacts the Kraken server to get the manifest of required artifacts, downloads RuneLite's bootstrap, and compares the SHA-256 hashes of the gamepack and injection hooks against Kraken's allowed list. The launcher then tells RuneLite to start the client inside the same JVM and patches RuneLite's classpath so it can add custom dependencies after the launcher has started but before the client starts.
+
+In RuneLite Mode the launcher changes nothing and RuneLite forks the client into a new `RuneLite.exe` process, as a stock install does. The fork passes its JVM arguments with `-J`, which makes RuneLite's native launcher ignore `config.json`'s `vmArgs`, so the client starts without the Kraken agent.
 
 It uses reflection to invoke `addURL` on the class loader, adding the Kraken client and its dependencies. The launcher creates a daemon thread that polls for `net.runelite.client.RuneLite.getInjector()` so it can use RuneLite classes like `PluginManager`. Because RuneLite is loaded in a child class loader, the launcher uses reflection on the `com.google.inject.Injector` interface to access the dependency graph.
 

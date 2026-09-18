@@ -42,7 +42,6 @@ import java.util.stream.Collectors;
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class KrakenProfiles {
 
-    public static final String PROFILE_ARG = "--kraken-profile";
     static final Path RUNELITE_DIR = Paths.get(System.getProperty("user.home"), ".runelite");
     public static final Path PROFILES_FILE = RUNELITE_DIR.resolve("kraken").resolve("plugins").resolve("Profile").resolve("profiles.txt");
     private static final String CREDENTIALS_PATH = "kraken/plugins/Profile/credentials.properties";
@@ -50,20 +49,6 @@ public final class KrakenProfiles {
     private static final String BASE64_KEY = "TVQydDUzcXBNTjZDZ1BHUXFtR2lwRDFvcXUwWWJMMWU=";
     private static final int IV_LENGTH = 16;
     private static final Gson GSON = new Gson();
-
-    /**
-     * Returns the value following --kraken-profile, or null when the flag is absent or has no value.
-     * @param args Arguments
-     * @return Kraken profile value or null if absent.
-     */
-    public static String fromArgs(String[] args) {
-        for (int i = 0; i < args.length - 1; i++) {
-            if (PROFILE_ARG.equals(args[i])) {
-                return args[i + 1];
-            }
-        }
-        return null;
-    }
 
     /**
      * Names of the linked Jagex profiles. Empty when nothing is linked or the file cannot be read.

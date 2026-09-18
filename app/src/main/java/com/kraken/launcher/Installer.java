@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -24,7 +25,26 @@ public class Installer {
 
     private static final String CONFIG_FILE = Utils.RUNELITE_DIR + File.separator + "config.json";
     private static final String SETTINGS_FILE = Utils.RUNELITE_DIR + File.separator + "settings.json";
-    private static final String TARGET_MAIN_CLASS = "com.kraken.launcher.Launcher";
+    private static final String RUNELITE_MAIN_CLASS = "net.runelite.launcher.Launcher";
+    private static final String LEGACY_MAIN_CLASS = "com.kraken.launcher.Launcher";
+    private static final String RUNELITE_JAR = "RuneLite.jar";
+
+    static final List<String> REQUIRED_VM_ARGS = Arrays.asList(
+            "--add-opens=java.base/java.net=ALL-UNNAMED",
+            "--add-exports=java.base/java.net=ALL-UNNAMED",
+            "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+            "--add-exports=java.base/java.lang.reflect=ALL-UNNAMED",
+            "--add-opens=java.base/java.lang=ALL-UNNAMED",
+            "--add-exports=java.base/java.lang=ALL-UNNAMED",
+            "--add-opens=java.base/jdk.internal.reflect=ALL-UNNAMED",
+            "--add-exports=java.base/jdk.internal.reflect=ALL-UNNAMED"
+    );
+
+    static final List<String> MAC_REQUIRED_VM_ARGS = Arrays.asList(
+            "--add-opens=java.desktop/com.apple.eawt=ALL-UNNAMED",
+            "--add-exports=java.desktop/com.apple.eawt=ALL-UNNAMED"
+    );
+
     private static final int DOWNLOAD_CONNECT_TIMEOUT_MS = 10_000;
     private static final int DOWNLOAD_READ_TIMEOUT_MS = 60_000;
 
@@ -39,7 +59,6 @@ public class Installer {
 
         SwingUtilities.invokeLater(Installer::showLauncherGui);
     }
-
 
     /**
      * Shows a small GUI with Install and Uninstall buttons.
@@ -361,61 +380,7 @@ public class Installer {
             configObject = JsonParser.parseReader(reader).getAsJsonObject();
         }
 
-        configObject.addProperty("mainClass", TARGET_MAIN_CLASS);
-
-        JsonArray classPath = new JsonArray();
-        classPath.add("RuneLite.jar");
-        classPath.add(jar);
-        configObject.add("classPath", classPath);
-
-        JsonArray existingVmArgs = configObject.has("vmArgs")
-                ? configObject.getAsJsonArray("vmArgs")
-                : new JsonArray();
-
-        // Java agents are detectable by Jagex in the login packet. Patches must be applied by this java agent at runtime
-        // in order to avoid the agent being sent in login packets.
-        JsonArray updatedVmArgs = new JsonArray();
-        updatedVmArgs.add("-javaagent:" + jar);
-
-        // java.base is strongly encapsulated from Java 16 onwards. Without these the launcher cannot
-        // reflectively add the Kraken artifacts to RuneLite's URLClassLoader and the client fails to start.
-        java.util.List<String> requiredVmArgs = Arrays.asList(
-                "--add-opens=java.base/java.net=ALL-UNNAMED",
-                "--add-exports=java.base/java.net=ALL-UNNAMED",
-                "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
-                "--add-exports=java.base/java.lang.reflect=ALL-UNNAMED",
-                "--add-opens=java.base/java.lang=ALL-UNNAMED",
-                "--add-exports=java.base/java.lang=ALL-UNNAMED",
-                "--add-opens=java.base/jdk.internal.reflect=ALL-UNNAMED",
-                "--add-exports=java.base/jdk.internal.reflect=ALL-UNNAMED"
-        );
-
-        java.util.List<String> macRequiredArgs = Arrays.asList(
-                "--add-opens=java.desktop/com.apple.eawt=ALL-UNNAMED",
-                "--add-exports=java.desktop/com.apple.eawt=ALL-UNNAMED"
-        );
-
-        for (String requiredArg : requiredVmArgs) {
-            updatedVmArgs.add(requiredArg);
-        }
-
-        if (Utils.IS_MAC) {
-            for (String macArg : macRequiredArgs) {
-                updatedVmArgs.add(macArg);
-            }
-        }
-
-        for (JsonElement argElement : existingVmArgs) {
-            String arg = argElement.getAsString();
-            boolean isOldJavaAgent = arg.startsWith("-javaagent:");
-            boolean isDuplicate = requiredVmArgs.contains(arg) || macRequiredArgs.contains(arg);
-            if (!isOldJavaAgent && !isDuplicate) {
-                updatedVmArgs.add(arg);
-            }
-        }
-
-        configObject.add("vmArgs", updatedVmArgs);
-        String jsonOutput = gson.toJson(configObject);
+        String jsonOutput = gson.toJson(applyKrakenConfig(configObject, jar, Utils.IS_MAC));
         log.info("Writing to config.json:\n{}", jsonOutput);
 
         try (FileWriter writer = new FileWriter(configFile)) {
@@ -429,6 +394,83 @@ public class Installer {
         }
 
         log.info("config.json file updated successfully.");
+    }
+
+    /**
+     * Adds the Kraken agent to a RuneLite config.json while keeping RuneLite's own mainClass and classPath. The agent
+     * loads in RuneLite's launcher JVM and starts Kraken from there. A client that RuneLite forks (RuneLite Mode) takes
+     * its JVM arguments from the fork's -J flags instead of vmArgs, and mainClass and classPath from this file, so it
+     * starts without any part of Kraken.
+     * @param config The parsed config.json; it is modified in place and returned
+     * @param jar File name of the launcher jar in the RuneLite directory
+     * @param mac True to add the macOS-only JVM arguments
+     * @return The same config object
+     */
+    static JsonObject applyKrakenConfig(JsonObject config, String jar, boolean mac) {
+        config.addProperty("mainClass", RUNELITE_MAIN_CLASS);
+
+        JsonArray classPath = new JsonArray();
+        classPath.add(RUNELITE_JAR);
+        config.add("classPath", classPath);
+
+        JsonArray existingVmArgs = config.has("vmArgs")
+                ? config.getAsJsonArray("vmArgs")
+                : new JsonArray();
+
+        // Java agents are detectable by Jagex in the login packet. Patches must be applied by this java agent at runtime
+        // in order to avoid the agent being sent in login packets.
+        JsonArray updatedVmArgs = new JsonArray();
+        updatedVmArgs.add("-javaagent:" + jar);
+        REQUIRED_VM_ARGS.forEach(updatedVmArgs::add);
+        if (mac) {
+            MAC_REQUIRED_VM_ARGS.forEach(updatedVmArgs::add);
+        }
+
+        for (JsonElement argElement : existingVmArgs) {
+            String arg = argElement.getAsString();
+            boolean isOldJavaAgent = arg.startsWith("-javaagent:");
+            boolean isDuplicate = REQUIRED_VM_ARGS.contains(arg) || MAC_REQUIRED_VM_ARGS.contains(arg);
+            if (!isOldJavaAgent && !isDuplicate) {
+                updatedVmArgs.add(arg);
+            }
+        }
+
+        config.add("vmArgs", updatedVmArgs);
+        return config;
+    }
+
+    /**
+     * Rewrites a config.json that still names Kraken's Launcher as mainClass (the layout installers built before the
+     * agent hook write) to the current layout, and leaves it read-only. Runs inside RuneLite's launcher JVM, where
+     * RuneLite.jar's Gson wins on the class path, so it only uses Gson#fromJson and Gson#toJson.
+     * @param configFile RuneLite's config.json
+     * @param jar File name of the launcher jar in the RuneLite directory
+     * @param mac True to add the macOS-only JVM arguments
+     * @return True when the file was rewritten
+     */
+    static boolean migrateConfigJson(File configFile, String jar, boolean mac) throws IOException {
+        if (!configFile.exists()) {
+            return false;
+        }
+
+        JsonObject config;
+        try (Reader reader = new InputStreamReader(new FileInputStream(configFile), StandardCharsets.UTF_8)) {
+            config = new Gson().fromJson(reader, JsonObject.class);
+        }
+
+        if (config == null || !config.has("mainClass") || !LEGACY_MAIN_CLASS.equals(config.get("mainClass").getAsString())) {
+            return false;
+        }
+
+        configFile.setWritable(true, false);
+        try (Writer writer = new OutputStreamWriter(new FileOutputStream(configFile), StandardCharsets.UTF_8)) {
+            writer.write(new GsonBuilder().setPrettyPrinting().create().toJson(applyKrakenConfig(config, jar, mac)));
+        }
+
+        if (!configFile.setWritable(false, false)) {
+            log.warn("Failed to lock config.json after migrating it. RuneLite might overwrite the injected vmArgs.");
+        }
+        return true;
     }
 
     private static boolean fixMacGatekeeper() throws IOException, InterruptedException {

@@ -12,7 +12,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public class KrakenProfilesTest {
@@ -58,12 +57,5 @@ public class KrakenProfilesTest {
 
         assertEquals("BronzeWraith", System.getenv("JX_DISPLAY_NAME"));
         assertEquals("BronzeWraith", System.getenv().get("JX_DISPLAY_NAME"));
-    }
-
-    @Test
-    public void readsTheProfileNameFromTheCommandLine() {
-        assertEquals("RuneWraith", KrakenProfiles.fromArgs(new String[]{"--qa", "--kraken-profile", "RuneWraith"}));
-        assertNull(KrakenProfiles.fromArgs(new String[]{"--kraken-profile"}));
-        assertNull(KrakenProfiles.fromArgs(new String[]{}));
     }
 }

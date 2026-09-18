@@ -18,8 +18,10 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 public class LauncherUI extends JFrame {
@@ -39,15 +41,19 @@ public class LauncherUI extends JFrame {
     private JCheckBox skipUpdateCheckbox;
     private JCheckBox skipLauncherCheckbox;
     private JCheckBox shareLogsCheckbox;
+    private JLabel profileLabel;
+    private JLabel proxyLabel;
     private JComboBox<String> profileComboBox;
     private JTextField proxyTextField;
     private final Gson gson;
+    private final CompletableFuture<LauncherPreferences> started;
 
     /**
-     * @param qaBootstrap True to use the QA bootstrap.
      * @param cliProfile Profile name passed with --kraken-profile, which overrides the saved selection, or null.
+     * @param started Completed with the preferences when the user presses Start.
      */
-    public LauncherUI(boolean qaBootstrap, String cliProfile) {
+    private LauncherUI(String cliProfile, CompletableFuture<LauncherPreferences> started) {
+        this.started = started;
         this.gson = new GsonBuilder().setPrettyPrinting().create();
         this.preferences = loadPreferences();
         if (cliProfile != null) {
@@ -58,14 +64,44 @@ public class LauncherUI extends JFrame {
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setResizable(false);
 
-        initComponents(qaBootstrap);
+        initComponents();
         loadPreferencesToUI();
 
         pack();
         setLocationRelativeTo(null);
     }
 
-    private void initComponents(boolean qaBootstrap) {
+    /**
+     * Shows the launcher, unless Skip Launcher is saved and forceShow is false, and blocks until the user presses
+     * Start. Cancel exits the process. Must not be called on the Event Dispatch Thread.
+     * @param cliProfile Profile name passed with --kraken-profile, which overrides the saved selection, or null
+     * @param forceShow True to show the launcher even when Skip Launcher is saved (--force-ui)
+     * @return The preferences the user started with
+     */
+    public static LauncherPreferences awaitStart(String cliProfile, boolean forceShow) throws InterruptedException, InvocationTargetException {
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception e) {
+            log.warn("Failed to set system look and feel: ", e);
+        }
+
+        CompletableFuture<LauncherPreferences> started = new CompletableFuture<>();
+        SwingUtilities.invokeAndWait(() -> {
+            LauncherUI gui = new LauncherUI(cliProfile, started);
+            if (forceShow) {
+                log.info("Force showing UI, --force-ui arg passed");
+                gui.setVisible(true);
+            } else if (gui.getPreferences().isSkipLauncher()) {
+                log.info("Skipping Kraken Launcher UI and starting RuneLite");
+                gui.onStartClicked();
+            } else {
+                gui.setVisible(true);
+            }
+        });
+        return started.join();
+    }
+
+    private void initComponents() {
         JPanel mainPanel = new JPanel();
         mainPanel.setLayout(new BorderLayout(0, 0));
         mainPanel.setBackground(DARK_BG);
@@ -120,7 +156,7 @@ public class LauncherUI extends JFrame {
         ));
 
         runeliteModeCheckbox = createStyledCheckbox("RuneLite Mode");
-        runeliteModeCheckbox.setToolTipText("Run native RuneLite without any type of Kraken modifications");
+        runeliteModeCheckbox.setToolTipText("Start RuneLite exactly as installed: no Kraken agent, plugins, character or proxy.");
 
         skipUpdateCheckbox = createStyledCheckbox("Skip Update Check");
         skipUpdateCheckbox.setToolTipText("Skips checking RuneLite after updates which could detect or track third party clients. (USE AT YOUR OWN RISK)");
@@ -128,7 +164,7 @@ public class LauncherUI extends JFrame {
         skipLauncherCheckbox = createStyledCheckbox("Skip Launcher");
         skipLauncherCheckbox.setToolTipText(
                 "<html>Skips the Kraken Launcher dialogue.<br>" +
-                        "To re-enable the dialogue again, run with --configure flag<br>" +
+                        "To re-enable the dialogue again, run with --force-ui flag<br>" +
                         "or set 'skipLauncher' to false in: ~/.runelite/kraken/krakenprefs.json</html>"
         );
 
@@ -140,7 +176,7 @@ public class LauncherUI extends JFrame {
                         "Nothing is sent otherwise.</html>"
         );
 
-        JLabel profileLabel = createStyledLabel("Character:");
+        profileLabel = createStyledLabel("Character:");
         profileComboBox = createStyledComboBox(KrakenProfiles.names());
         profileComboBox.setToolTipText(
                 "<html>Jagex account to log the client in with.<br>" +
@@ -148,7 +184,7 @@ public class LauncherUI extends JFrame {
                         "The default uses whichever account the Jagex launcher last used.</html>"
         );
 
-        JLabel proxyLabel = createStyledLabel("Proxy (SOCKS5):");
+        proxyLabel = createStyledLabel("Proxy (SOCKS5):");
 
         proxyTextField = new JTextField();
         proxyTextField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 35));
@@ -163,7 +199,9 @@ public class LauncherUI extends JFrame {
         ));
         proxyTextField.setFont(new Font("Monospaced", Font.PLAIN, 12));
         proxyTextField.setToolTipText("Format: ip:port or ip:port:user:pass");
+        proxyTextField.setDisabledTextColor(Theme.DISABLED_TEXT);
 
+        runeliteModeCheckbox.addItemListener(e -> updateKrakenOnlyOptions());
         optionsPanel.add(runeliteModeCheckbox);
         optionsPanel.add(Box.createVerticalStrut(15));
         optionsPanel.add(skipUpdateCheckbox);
@@ -189,8 +227,7 @@ public class LauncherUI extends JFrame {
         JButton startButton = createStyledButton("Start RuneLite", PRIMARY_GREEN);
         JButton cancelButton = createStyledButton("Cancel", new Color(80, 80, 80));
 
-        // If the UI is showing then users did not launch in Configure mode
-        startButton.addActionListener(e -> onStartClicked(false, qaBootstrap));
+        startButton.addActionListener(e -> onStartClicked());
         cancelButton.addActionListener(e -> onCancelClicked());
 
         buttonsPanel.add(startButton);
@@ -244,6 +281,18 @@ public class LauncherUI extends JFrame {
             public void paintCurrentValueBackground(Graphics g, Rectangle bounds, boolean hasFocus) {
                 g.setColor(DARK_BG);
                 g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+            }
+
+            // Paint the selected value in the theme colours in both states. The base UI switches to the look and
+            // feel's disabled colours, which are light on Windows.
+            @Override
+            public void paintCurrentValue(Graphics g, Rectangle bounds, boolean hasFocus) {
+                Component c = comboBox.getRenderer().getListCellRendererComponent(
+                        listBox, comboBox.getSelectedItem(), -1, false, false);
+                c.setFont(comboBox.getFont());
+                c.setBackground(DARK_BG);
+                c.setForeground(comboBox.isEnabled() ? TEXT_COLOR : Theme.DISABLED_TEXT);
+                currentValuePane.paintComponent(g, c, comboBox, bounds.x, bounds.y, bounds.width, bounds.height, false);
             }
 
             @Override
@@ -300,28 +349,15 @@ public class LauncherUI extends JFrame {
         return button;
     }
 
-    public void onStartClicked(boolean configure, boolean qa) {
+    /**
+     * Saves the selections, closes the window and hands the preferences to the thread waiting in awaitStart. The frame
+     * is disposed rather than hidden so no window keeps the launcher process alive after RuneLite forks the client.
+     */
+    private void onStartClicked() {
         log.info("Starting RuneLite launcher");
         persistPreferencesFromUI();
-
-        setVisible(false);
-
-        new Thread(() -> {
-            try {
-                Launcher.startWithPreferences(preferences, configure, qa);
-            } catch (Exception e) {
-                log.error("Failed to start launcher", e);
-                SwingUtilities.invokeLater(() -> {
-                    JOptionPane.showMessageDialog(
-                            LauncherUI.this,
-                            "Failed to start launcher: " + e.getMessage(),
-                            "Error",
-                            JOptionPane.ERROR_MESSAGE
-                    );
-                    setVisible(true);
-                });
-            }
-        }).start();
+        dispose();
+        started.complete(preferences);
     }
 
     private void onCancelClicked() {
@@ -349,6 +385,22 @@ public class LauncherUI extends JFrame {
         shareLogsCheckbox.setSelected(preferences.isShareLogs());
         proxyTextField.setText(preferences.getProxy() != null ? preferences.getProxy() : "");
         selectProfile(preferences.getKrakenProfile());
+        updateKrakenOnlyOptions();
+    }
+
+    /**
+     * Greys out the options that only apply to Kraken while RuneLite Mode is selected. Their saved values are kept but
+     * not applied, since RuneLite Mode starts stock RuneLite. The labels are recoloured rather than disabled so they
+     * look the same under every look and feel.
+     */
+    private void updateKrakenOnlyOptions() {
+        boolean kraken = !runeliteModeCheckbox.isSelected();
+        skipUpdateCheckbox.setEnabled(kraken);
+        shareLogsCheckbox.setEnabled(kraken);
+        profileComboBox.setEnabled(kraken);
+        proxyTextField.setEnabled(kraken);
+        profileLabel.setForeground(kraken ? TEXT_COLOR : Theme.DISABLED_TEXT);
+        proxyLabel.setForeground(kraken ? TEXT_COLOR : Theme.DISABLED_TEXT);
     }
 
     /**
