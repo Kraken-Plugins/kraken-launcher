@@ -26,10 +26,6 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("com.google.guava:guava:31.1-jre")
 
-    // Ed25519 verification of the signed bootstrap. JDK 11 has no built-in EdDSA, and this must stay a
-    // system-classloader dependency (it verifies before the -javaagent trusts any downloaded jar).
-    implementation("net.i2p.crypto:eddsa:0.3.0")
-
     // Required since these need to use system classloader so they can't be included
     // dynamically in the bootstrap.
     implementation("net.bytebuddy:byte-buddy:1.18.4")
@@ -63,11 +59,17 @@ testing {
     }
 }
 
+// Tests run without the launcher's instrumentation agent, so open the java.base packages that
+// KrakenProfiles.putEnv reflects into up front.
+tasks.named('test') {
+    jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED', '--add-opens=java.base/java.util=ALL-UNNAMED'
+}
+
 java {
     withSourcesJar()
     withJavadocJar()
     toolchain {
-        languageVersion = JavaLanguageVersion.of(11)
+        languageVersion = JavaLanguageVersion.of(17)
     }
 }
 
@@ -137,6 +139,6 @@ launch4j {
     downloadUrl = 'https://kraken-plugins.com/download'
     supportUrl = "https://kraken-plugins.com/docs/client/download.html"
     companyName = "Kraken Plugins"
-    jreMinVersion = '1.11.0'
+    jreMinVersion = '17.0.0'
     icon = "${projectDir}/src/main/resources/favicon.ico"
 }

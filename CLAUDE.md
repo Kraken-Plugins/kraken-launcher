@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 java -jar app/build/libs/kraken-launcher-1.0.0-fat.jar   # runs the Installer GUI
 ```
 
-Version comes from the `VERSION` env var (defaults to `1.0.0`) and is filtered into `kraken-version.properties` by `processResources`. Java 11 toolchain — do not use APIs above 11.
+Version comes from the `VERSION` env var (defaults to `1.0.0`) and is filtered into `kraken-version.properties` by `processResources`. Java 17 toolchain — do not use APIs above 17.
 
 Tests are JUnit 4 under `app/src/test` (`./gradlew test`). CI (`.github/workflows/release.yml`) builds on push to master, versions as `1.0.<run_number>`, tags, uploads the fat jar as `KrakenSetup.jar` and a zipped exe+JRE bundle to SeaweedFS, and cuts a GitHub release.
 

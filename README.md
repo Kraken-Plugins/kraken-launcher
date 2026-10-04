@@ -39,7 +39,7 @@ This repository also includes an installer that adds the launcher JAR to RuneLit
 
 ## Installation & Usage
 
-This launcher requires Java 11 or higher and RuneLite to be pre-installed on your system. The installer supports Windows and macOS.
+This launcher requires Java 17 or higher and RuneLite to be pre-installed on your system. The installer supports Windows and macOS.
 
 ### Build and run locally
 

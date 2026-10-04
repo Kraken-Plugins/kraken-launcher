@@ -43,10 +43,10 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "Version determined: $VERSION"
 
-      - name: Set up JDK 11
+      - name: Set up JDK 17
         uses: actions/setup-java@v5.2.0
         with:
-          java-version: '11'
+          java-version: '17'
           distribution: 'temurin'
           cache: 'gradle'
 
@@ -58,23 +58,23 @@ jobs:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: ./gradlew shadowJar createExe sha256 --no-daemon
 
+      # Pinned to the same JRE RuneLite bundles for Windows x64 (WIN64_* in runelite/launcher .jdk-versions.sh).
+      # Bump all three values together when RuneLite updates theirs.
       - name: Download Windows JRE
+        env:
+          WIN64_RELEASE: jdk-17.0.19+10
+          WIN64_CHKSUM: 79a598e1fbb4e16582d92c4ee22280a3c4d72fd52606e1e46b1223c0fe53b0da
+          WIN64_LINK: https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.19%2B10/OpenJDK17U-jre_x64_windows_hotspot_17.0.19_10.zip
         run: |
-          JRE_URL="https://api.adoptium.net/v3/binary/latest/11/ga/windows/x64/jre/hotspot/normal/eclipse"
-          
-          echo "Downloading Windows JRE..."
-          wget -O windows-jre.zip "$JRE_URL"
-          
-          echo "Unzipping..."
-          unzip -q windows-jre.zip -d temp_jre
-          
-          # The zip usually contains a root folder like 'jdk-11.0.18+10-jre', find it and move contents
-          JRE_ROOT=$(ls temp_jre | head -n 1)
-          mv "temp_jre/$JRE_ROOT" jre-windows
-          
+          echo "Downloading Windows JRE $WIN64_RELEASE..."
+          curl -fsSLo windows-jre.zip "$WIN64_LINK"
+          echo "$WIN64_CHKSUM  windows-jre.zip" | sha256sum -c
+
+          unzip -q windows-jre.zip
+          mv "$WIN64_RELEASE-jre" jre-windows
+
           rm windows-jre.zip
-          rm -rf temp_jre
-          
+
       - name: Create Distribution Bundle
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"

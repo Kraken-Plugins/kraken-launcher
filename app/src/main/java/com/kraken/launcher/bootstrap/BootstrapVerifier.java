@@ -3,14 +3,11 @@ package com.kraken.launcher.bootstrap;
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import net.i2p.crypto.eddsa.EdDSAEngine;
-import net.i2p.crypto.eddsa.EdDSAPublicKey;
-import net.i2p.crypto.eddsa.spec.EdDSANamedCurveTable;
-import net.i2p.crypto.eddsa.spec.EdDSAParameterSpec;
-import net.i2p.crypto.eddsa.spec.EdDSAPublicKeySpec;
 
-import java.security.MessageDigest;
+import java.security.KeyFactory;
+import java.security.PublicKey;
 import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 
 /**
@@ -35,7 +32,17 @@ public final class BootstrapVerifier {
      */
     private static final String PUBLIC_KEY_BASE64 = "NSjLI5vUdJKc0oD6I3u72ZAu5walES9VXRYxF38l5Q0=";
 
-    private static final EdDSAParameterSpec ED25519 = EdDSANamedCurveTable.getByName(EdDSANamedCurveTable.ED_25519);
+    private static final String ED25519 = "Ed25519";
+
+    private static final int PUBLIC_KEY_LENGTH = 32;
+
+    /**
+     * DER header of an X.509 SubjectPublicKeyInfo for Ed25519 (OID 1.3.101.112). Prefixing it to the raw 32-byte
+     * key gives the encoding the JDK's {@link KeyFactory} accepts.
+     */
+    private static final byte[] X509_ED25519_PREFIX = {
+            0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00
+    };
 
     /**
      * Verifies a detached signature against the bootstrap bytes using the pinned public key.
@@ -66,11 +73,8 @@ public final class BootstrapVerifier {
 
         try {
             byte[] signature = Base64.getDecoder().decode(base64Signature.trim());
-            EdDSAPublicKey publicKey = new EdDSAPublicKey(
-                    new EdDSAPublicKeySpec(Base64.getDecoder().decode(base64PublicKey.trim()), ED25519));
-
-            Signature engine = new EdDSAEngine(MessageDigest.getInstance(ED25519.getHashAlgorithm()));
-            engine.initVerify(publicKey);
+            Signature engine = Signature.getInstance(ED25519);
+            engine.initVerify(decodePublicKey(base64PublicKey));
             engine.update(bootstrapBytes);
 
             boolean valid = engine.verify(signature);
@@ -82,5 +86,17 @@ public final class BootstrapVerifier {
             log.error("Bootstrap signature verification threw an exception; treating as invalid.", e);
             return false;
         }
+    }
+
+    private static PublicKey decodePublicKey(String base64PublicKey) throws Exception {
+        byte[] raw = Base64.getDecoder().decode(base64PublicKey.trim());
+        if (raw.length != PUBLIC_KEY_LENGTH) {
+            throw new IllegalArgumentException("Ed25519 public key must be " + PUBLIC_KEY_LENGTH + " bytes, got " + raw.length);
+        }
+
+        byte[] encoded = new byte[X509_ED25519_PREFIX.length + raw.length];
+        System.arraycopy(X509_ED25519_PREFIX, 0, encoded, 0, X509_ED25519_PREFIX.length);
+        System.arraycopy(raw, 0, encoded, X509_ED25519_PREFIX.length, raw.length);
+        return KeyFactory.getInstance(ED25519).generatePublic(new X509EncodedKeySpec(encoded));
     }
 }
