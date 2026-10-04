@@ -201,6 +201,8 @@ public class Installer {
                             + "\nPlease install RuneLite first.");
         }
 
+        checkRuneLiteJava(targetDir);
+
         String jarName;
 
         if (currentJar.getName().toLowerCase().endsWith(".exe")) {
@@ -230,6 +232,47 @@ public class Installer {
         }
 
         log.info("Kraken Launcher installation completed successfully.");
+    }
+
+    /**
+     * Refuses to install when the JRE bundled with RuneLite is older than {@link KrakenAgentEntry#MINIMUM_JAVA_VERSION}.
+     * The agent runs in RuneLite's JVM rather than the installer's, so the installer's own Java version says nothing
+     * about it. When the JRE's release file is missing or unreadable the install continues, since the agent entry point
+     * also checks the version before starting Kraken.
+     * @param runeLiteDir The RuneLite installation directory
+     */
+    static void checkRuneLiteJava(File runeLiteDir) throws IOException {
+        File releaseFile = new File(runeLiteDir, "jre" + File.separator + "release");
+        if (!releaseFile.isFile()) {
+            log.warn("No JRE release file at {}, skipping the RuneLite Java version check.", releaseFile.getAbsolutePath());
+            return;
+        }
+
+        int javaVersion = releaseJavaVersion(Files.readAllLines(releaseFile.toPath(), StandardCharsets.UTF_8));
+        if (javaVersion < 0) {
+            log.warn("Could not read JAVA_VERSION from {}, skipping the RuneLite Java version check.", releaseFile.getAbsolutePath());
+            return;
+        }
+
+        log.info("RuneLite's bundled JRE is Java {}", javaVersion);
+        if (javaVersion < KrakenAgentEntry.MINIMUM_JAVA_VERSION) {
+            throw new UnsupportedOperationException(KrakenAgentEntry.unsupportedJavaMessage(javaVersion));
+        }
+    }
+
+    /**
+     * Reads the Java feature version from the lines of a JRE release file, such as {@code JAVA_VERSION="17.0.19"}.
+     * @param lines The lines of the release file
+     * @return The feature version, or -1 when there is no readable JAVA_VERSION line
+     */
+    static int releaseJavaVersion(List<String> lines) {
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("JAVA_VERSION=")) {
+                return KrakenAgentEntry.featureVersion(trimmed.substring("JAVA_VERSION=".length()).replace("\"", ""));
+            }
+        }
+        return -1;
     }
 
     /**

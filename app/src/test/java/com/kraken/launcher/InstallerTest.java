@@ -19,6 +19,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class InstallerTest {
 
@@ -132,6 +133,44 @@ public class InstallerTest {
         File missing = new File(tmp.getRoot(), "missing-config.json");
 
         assertFalse(Installer.migrateConfigJson(missing, "KrakenSetup.jar", false));
+    }
+
+    @Test
+    public void readsTheJavaVersionFromAJreReleaseFile() {
+        assertEquals(17, Installer.releaseJavaVersion(List.of("IMPLEMENTOR=\"Eclipse Adoptium\"", "JAVA_VERSION=\"17.0.19\"")));
+        assertEquals(11, Installer.releaseJavaVersion(List.of("JAVA_VERSION=\"11.0.31\"")));
+        assertEquals(-1, Installer.releaseJavaVersion(List.of("IMPLEMENTOR=\"Eclipse Adoptium\"")));
+    }
+
+    @Test
+    public void allowsARuneLiteJreAtTheMinimumVersion() throws Exception {
+        Installer.checkRuneLiteJava(runeLiteDirWithJava("17.0.19"));
+    }
+
+    @Test
+    public void refusesARuneLiteJreOlderThanTheMinimumVersion() throws Exception {
+        File runeLiteDir = runeLiteDirWithJava("11.0.31");
+
+        try {
+            Installer.checkRuneLiteJava(runeLiteDir);
+            fail("Expected the install to be refused on Java 11");
+        } catch (UnsupportedOperationException e) {
+            assertEquals(KrakenAgentEntry.unsupportedJavaMessage(11), e.getMessage());
+        }
+    }
+
+    @Test
+    public void continuesWhenRuneLiteHasNoJreReleaseFile() throws Exception {
+        Installer.checkRuneLiteJava(tmp.newFolder("RuneLite"));
+    }
+
+    private File runeLiteDirWithJava(String version) throws Exception {
+        File runeLiteDir = tmp.newFolder("RuneLite");
+        File jre = new File(runeLiteDir, "jre");
+        assertTrue(jre.mkdir());
+        Files.write(new File(jre, "release").toPath(),
+                ("IMPLEMENTOR=\"Eclipse Adoptium\"\nJAVA_VERSION=\"" + version + "\"\n").getBytes(StandardCharsets.UTF_8));
+        return runeLiteDir;
     }
 
     private static JsonObject parse(String json) {

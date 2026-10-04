@@ -41,6 +41,8 @@ This repository also includes an installer that adds the launcher JAR to RuneLit
 
 This launcher requires Java 17 or higher and RuneLite to be pre-installed on your system. The installer supports Windows and macOS.
 
+Kraken runs on the Java runtime bundled with RuneLite, so that runtime must be Java 17 or higher too. RuneLite installs from before July 2026 bundle Java 11; reinstall RuneLite from [runelite.net](https://runelite.net) before running the Kraken installer. The installer refuses to install on an older runtime, and an already installed launcher shows a warning and starts RuneLite without Kraken.
+
 ### Build and run locally
 
 Build the shaded jar with Gradle:

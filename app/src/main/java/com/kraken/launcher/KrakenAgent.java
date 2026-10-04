@@ -1,5 +1,7 @@
 package com.kraken.launcher;
 
+import lombok.AccessLevel;
+import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.agent.builder.ResettableClassFileTransformer;
@@ -8,26 +10,23 @@ import net.bytebuddy.utility.JavaModule;
 
 import java.lang.instrument.Instrumentation;
 
-import static net.bytebuddy.matcher.ElementMatchers.isStatic;
-import static net.bytebuddy.matcher.ElementMatchers.named;
-import static net.bytebuddy.matcher.ElementMatchers.takesArguments;
+import static net.bytebuddy.matcher.ElementMatchers.*;
 
 /**
- * The launcher jar's Premain-Class. The Installer adds the jar to RuneLite's config.json as -javaagent, so this runs in
- * RuneLite's launcher JVM before net.runelite.launcher.Launcher.main. premain does not receive the program arguments,
+ * The launcher agent, started by {@link KrakenAgentEntry} once it has checked the JVM is new enough. The Installer adds
+ * the jar to RuneLite's config.json as -javaagent, so this runs in RuneLite's launcher JVM before
+ * net.runelite.launcher.Launcher.main. premain does not receive the program arguments,
  * so it only registers the Instrumentation handle with ByteBuddy and hooks RuneLite's main with
  * {@link LauncherMainAdvice}; {@link KrakenStartup} does the rest once main is called.
  */
 @Slf4j
+@NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class KrakenAgent {
 
     private static final String RUNELITE_LAUNCHER_CLASS = "net.runelite.launcher.Launcher";
 
     private static volatile Instrumentation instrumentation;
     private static volatile ResettableClassFileTransformer launcherHook;
-
-    private KrakenAgent() {
-    }
 
     public static void premain(String agentArgs, Instrumentation inst) {
         net.bytebuddy.agent.Installer.premain(agentArgs, inst);
