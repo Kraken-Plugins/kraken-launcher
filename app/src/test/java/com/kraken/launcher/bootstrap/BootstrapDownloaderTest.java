@@ -18,6 +18,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
 import java.security.Signature;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
@@ -32,6 +33,7 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeNotNull;
 
 public class BootstrapDownloaderTest {
 
@@ -39,6 +41,8 @@ public class BootstrapDownloaderTest {
     private static final String API = "kraken-api-1.0.0.jar";
     private static final byte[] CLIENT_BYTES = "client jar".getBytes(StandardCharsets.UTF_8);
     private static final byte[] API_BYTES = "api jar".getBytes(StandardCharsets.UTF_8);
+    private static final String DEPENDENCY = "runelite-api-1.13.1.jar";
+    private static final byte[] DEPENDENCY_BYTES = "dependency jar".getBytes(StandardCharsets.UTF_8);
 
     @Rule
     public TemporaryFolder temp = new TemporaryFolder();
@@ -74,6 +78,7 @@ public class BootstrapDownloaderTest {
 
         served.put("/" + CLIENT, CLIENT_BYTES);
         served.put("/" + API, API_BYTES);
+        served.put("/" + DEPENDENCY, DEPENDENCY_BYTES);
         serveBootstrap(bootstrapJson("injected-hash"));
     }
 
@@ -172,6 +177,134 @@ public class BootstrapDownloaderTest {
         assertThrows(IOException.class, () -> offline.fetchLatestArtifact(artifact(offline, CLIENT)));
     }
 
+    @Test
+    public void fetchedArtifactIsASessionCopyNamedAfterThisProcess() throws Exception {
+        BootstrapDownloader online = downloader();
+        online.downloadKrakenBootstrap();
+
+        File api = online.fetchLatestArtifact(artifact(online, API));
+
+        assertEquals(API + "-" + ProcessHandle.current().pid() + ".jar", api.getName());
+    }
+
+    @Test
+    public void sessionCopiesOfExitedClientsArePruned() throws Exception {
+        BootstrapDownloader online = downloader();
+        online.downloadKrakenBootstrap();
+        File running = online.fetchLatestArtifact(artifact(online, API));
+        File randomlyNumbered = cacheFile(API + "-735301764604604154.jar");
+        File beyondLongRange = cacheFile(CLIENT + "-18446744073709551000.jar");
+
+        online.pruneCache();
+
+        assertTrue(running.exists());
+        assertFalse(randomlyNumbered.exists());
+        assertFalse(beyondLongRange.exists());
+    }
+
+    @Test
+    public void sessionCopyWrittenBeforeItsProcessIdWasReusedIsPruned() throws Exception {
+        Instant start = ProcessHandle.current().info().startInstant().orElse(null);
+        assumeNotNull(start);
+        File stale = cacheFile(API + "-" + ProcessHandle.current().pid() + ".jar");
+        assertTrue(stale.setLastModified(start.minusSeconds(3600).toEpochMilli()));
+
+        downloader().pruneCache();
+
+        assertFalse(stale.exists());
+    }
+
+    @Test
+    public void jarsNoBootstrapNamesArePruned() throws Exception {
+        BootstrapDownloader online = downloader();
+        online.downloadKrakenBootstrap();
+        File dependency = online.cacheArtifact(artifact(online, DEPENDENCY));
+        online.fetchLatestArtifact(artifact(online, CLIENT));
+        online.fetchLatestArtifact(artifact(online, API));
+        File oldClient = cacheFile("Kraken-Client-0.9.0.jar");
+        File oldApi = cacheFile("kraken-api-0.9.0.jar");
+        File oldDependency = cacheFile("runelite-api-1.12.39.jar");
+        File notAJar = cacheFile("runelite-api-1.12.39.jar-123.part");
+
+        online.pruneCache();
+
+        assertTrue(new File(cacheDir, CLIENT).exists());
+        assertTrue(new File(cacheDir, API).exists());
+        assertTrue(dependency.exists());
+        assertTrue(new File(cacheDir, "bootstrap.json").exists());
+        assertTrue(notAJar.exists());
+        assertFalse(oldClient.exists());
+        assertFalse(oldApi.exists());
+        assertFalse(oldDependency.exists());
+    }
+
+    @Test
+    public void jarsNamedByTheSavedQaBootstrapAreKept() throws Exception {
+        BootstrapDownloader online = downloader();
+        online.downloadKrakenBootstrap();
+        Files.writeString(new File(cacheDir, "bootstrap-qa.json").toPath(),
+                "{\"artifacts\":[{\"name\":\"kraken-api-2.0.0.jar\"},{\"name\":\"runelite-api-1.13.2.jar\"}]}");
+        File qaApi = cacheFile("kraken-api-2.0.0.jar");
+        File qaDependency = cacheFile("runelite-api-1.13.2.jar");
+
+        online.pruneCache();
+
+        assertTrue(qaApi.exists());
+        assertTrue(qaDependency.exists());
+    }
+
+    @Test
+    public void jarsOfTheBootstrapInUseAreKeptWhenItWasNotSaved() throws Exception {
+        BootstrapDownloader online = downloader();
+        online.downloadKrakenBootstrap();
+        File dependency = online.cacheArtifact(artifact(online, DEPENDENCY));
+        Files.writeString(new File(cacheDir, "bootstrap.json").toPath(), "{\"artifacts\":[{\"name\":\"kraken-api-0.9.0.jar\"}]}");
+
+        online.pruneCache();
+
+        assertTrue(dependency.exists());
+    }
+
+    @Test
+    public void jarNamesAreComparedWithoutCase() throws Exception {
+        BootstrapDownloader online = downloader();
+        online.downloadKrakenBootstrap();
+        File differentCase = cacheFile(DEPENDENCY.toUpperCase());
+
+        online.pruneCache();
+
+        assertTrue(differentCase.exists());
+    }
+
+    @Test
+    public void unreadableSavedBootstrapKeepsEveryJar() throws Exception {
+        BootstrapDownloader online = downloader();
+        online.downloadKrakenBootstrap();
+        Files.writeString(new File(cacheDir, "bootstrap-qa.json").toPath(), "not json");
+        File oldDependency = cacheFile("runelite-api-1.12.39.jar");
+
+        online.pruneCache();
+
+        assertTrue(oldDependency.exists());
+    }
+
+    @Test
+    public void jarsAreKeptWithoutAnyBootstrap() throws Exception {
+        File api = cacheFile(API);
+        File dependency = cacheFile(DEPENDENCY);
+
+        downloader().pruneCache();
+
+        assertTrue(api.exists());
+        assertTrue(dependency.exists());
+    }
+
+    private File cacheFile(String name) throws IOException {
+        File file = new File(cacheDir, name);
+        Files.write(file.toPath(), API_BYTES);
+        return file;
+    }
+
     private BootstrapDownloader downloader() {
         return new BootstrapDownloader(baseUrl + "/bootstrap.json", cacheDir, verifier);
     }
@@ -194,7 +327,8 @@ public class BootstrapDownloaderTest {
 
     private String bootstrapJson(String hash) throws Exception {
         return "{\"hash\":\"" + hash + "\",\"hookHash\":\"hook-hash\",\"artifacts\":["
-                + artifactJson(CLIENT, CLIENT_BYTES) + "," + artifactJson(API, API_BYTES) + "]}";
+                + artifactJson(CLIENT, CLIENT_BYTES) + "," + artifactJson(API, API_BYTES) + ","
+                + artifactJson(DEPENDENCY, DEPENDENCY_BYTES) + "]}";
     }
 
     private String artifactJson(String name, byte[] content) throws Exception {

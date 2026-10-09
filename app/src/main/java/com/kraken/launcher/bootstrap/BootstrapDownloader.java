@@ -24,8 +24,12 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.function.BiPredicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Slf4j
 public class BootstrapDownloader {
@@ -36,6 +40,8 @@ public class BootstrapDownloader {
             .resolve("repository2")
             .toFile();
     private static final String SIGNATURE_SUFFIX = ".sig";
+    // <artifact>-<number>.jar, the per-launch copy of a Kraken client or api jar; the number is the owning process id.
+    private static final Pattern SESSION_COPY = Pattern.compile("(?i)kraken-(?:client|api)-.+\\.jar-(\\d+)\\.jar");
     private static final int REQUEST_TIMEOUT_SECONDS = 20;
     private static final int ARTIFACT_CONNECT_TIMEOUT_MS = 10_000;
     private static final int ARTIFACT_READ_TIMEOUT_MS = 60_000;
@@ -307,8 +313,10 @@ public class BootstrapDownloader {
      * {@link #isOffline() offline} launch uses that copy instead of downloading. Either way the SHA-256 must match the
      * bootstrap hash, except for the Kraken client.
      * <p>
-     * The returned file is a temporary copy scheduled for deletion on JVM exit, so it survives the client session and
-     * a running client never holds the kept copy open while another launch replaces it.
+     * The returned file is a session copy named after this process ({@code <artifact>-<pid>.jar}), so a running client
+     * never holds the kept copy open while another launch replaces it, and {@link #pruneCache()} can tell when the
+     * client using it has exited. It is also scheduled for deletion on JVM exit, which fails on Windows while the
+     * client's class loader still has the jar open.
      * @param artifact The artifact to download (or copy) and verify.
      * @return A verified local file whose contents match the bootstrap hash.
      * @throws IOException if the hash is missing, no kept copy exists offline, or the bytes fail verification.
@@ -324,7 +332,7 @@ public class BootstrapDownloader {
             throw new IOException("The Kraken server is unreachable and no earlier launch kept a copy of " + artifact.getName());
         }
 
-        Path tempFile = Files.createTempFile(cacheDir.toPath(), artifact.getName() + "-", ".jar");
+        Path tempFile = new File(cacheDir, artifact.getName() + "-" + ProcessHandle.current().pid() + ".jar").toPath();
         tempFile.toFile().deleteOnExit();
 
         try {
@@ -357,6 +365,99 @@ public class BootstrapDownloader {
         } catch (Exception e) {
             Files.deleteIfExists(tempFile);
             throw e;
+        }
+    }
+
+    /**
+     * Deletes the cached jars no launch can use any more: Kraken client and api session copies whose client has
+     * exited, and any other jar that neither the bootstrap this launch uses nor a saved bootstrap (production or QA)
+     * names, such as dependencies an updated bootstrap moved to a newer version. Those jars are left alone when a
+     * saved bootstrap cannot be read. A file that cannot be deleted, such as a jar a running client has open on Windows,
+     * is left for a later launch. Files other than jars, including in-progress downloads, are not touched.
+     */
+    public void pruneCache() {
+        File[] files = cacheDir.listFiles(File::isFile);
+        if (files == null) {
+            return;
+        }
+
+        Set<String> artifactNames = knownArtifactNames();
+        for (File file : files) {
+            String name = file.getName();
+            Matcher sessionCopy = SESSION_COPY.matcher(name);
+            boolean unused;
+            if (sessionCopy.matches()) {
+                unused = !isSessionCopyInUse(file, sessionCopy.group(1));
+            } else if (name.toLowerCase(Locale.ROOT).endsWith(".jar")) {
+                unused = artifactNames != null && !artifactNames.contains(name.toLowerCase(Locale.ROOT));
+            } else {
+                continue;
+            }
+
+            if (unused) {
+                try {
+                    Files.delete(file.toPath());
+                    log.info("Deleted unused cached artifact: {}", file.getName());
+                } catch (IOException e) {
+                    log.debug("Unable to delete unused cached artifact {}: {}", file.getName(), e.getMessage());
+                }
+            }
+        }
+    }
+
+    /**
+     * Whether the client that made a session copy may still be using it. The copy is named after that client's
+     * process id, which a later process can reuse, so a running process only counts as the owner if it started before
+     * the copy was written. Names from launchers that numbered copies randomly never match a running process.
+     */
+    private static boolean isSessionCopyInUse(File sessionCopy, String processId) {
+        long pid;
+        try {
+            pid = Long.parseLong(processId);
+        } catch (NumberFormatException e) {
+            return false;
+        }
+
+        Instant written = Instant.ofEpochMilli(sessionCopy.lastModified());
+        return ProcessHandle.of(pid)
+                .map(process -> process.info().startInstant().map(start -> !start.isAfter(written)).orElse(true))
+                .orElse(false);
+    }
+
+    /**
+     * Returns the lower-cased names of the artifacts in the bootstrap this launch uses and in every bootstrap saved in
+     * the cache, or null when a saved bootstrap cannot be read or no bootstrap is known, so nothing is pruned on
+     * incomplete information. Names are compared lower-cased because Windows file names ignore case. The bootstrap in
+     * use is included because this launch has already loaded its jars, even if saving it failed.
+     */
+    private Set<String> knownArtifactNames() {
+        Set<String> names = new HashSet<>();
+        addArtifactNames(krakenBootstrap, names);
+
+        File[] savedBootstraps = cacheDir.listFiles((dir, name) -> name.startsWith("bootstrap") && name.endsWith(".json"));
+        if (savedBootstraps != null) {
+            for (File savedBootstrap : savedBootstraps) {
+                try {
+                    addArtifactNames(parseBootstrap(Files.readAllBytes(savedBootstrap.toPath())), names);
+                } catch (Exception e) {
+                    log.warn("Unable to read saved bootstrap {}, keeping every cached jar: {}",
+                            savedBootstrap.getName(), e.getMessage());
+                    return null;
+                }
+            }
+        }
+        return names.isEmpty() ? null : names;
+    }
+
+    private static void addArtifactNames(Bootstrap bootstrap, Set<String> names) {
+        if (bootstrap == null || bootstrap.getArtifacts() == null) {
+            return;
+        }
+
+        for (Artifact artifact : bootstrap.getArtifacts()) {
+            if (artifact.getName() != null) {
+                names.add(artifact.getName().toLowerCase(Locale.ROOT));
+            }
         }
     }
 }

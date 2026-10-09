@@ -346,6 +346,10 @@ public class Launcher {
             // Wait for the RuneLite injector to be created by Guice, then load the Kraken plugin. Runs on the same
             // managed patcher executor rather than a bare thread so it is named, daemonised and shut down cleanly.
             executorService.execute(() -> awaitInjectorAndStartWatcher(classLoader));
+
+            // This launch's jars are in place, so cached jars no running client or bootstrap needs can go. Queued
+            // behind the watcher so pruning never delays or blocks loading the Kraken plugin.
+            executorService.execute(bootstrapDownloader::pruneCache);
         } catch (InterruptedException e) {
             log.warn("Client patching process interrupted: ", e);
             Thread.currentThread().interrupt();
