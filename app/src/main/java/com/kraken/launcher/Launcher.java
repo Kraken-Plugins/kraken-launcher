@@ -243,6 +243,12 @@ public class Launcher {
             return false;
         }
 
+        if (bootstrapDownloader.isOffline()) {
+            log.warn("The Kraken server is unreachable. Starting from the Kraken bootstrap and client saved by an " +
+                    "earlier launch; Kraken sign-in and plugins may be unavailable, sideloaded plugins still load.");
+        }
+
+        // An offline launch is still checked: the saved bootstrap must match RuneLite's current client.
         SafetyCheckResult safety = checkInjectedClientVersion(bootstrapDownloader, preferences);
         if (!safety.ok) {
             log.error("RuneLite update safety check failed. Halting client startup until the update is verified.");
@@ -251,7 +257,7 @@ public class Launcher {
         }
 
         log.info("Kraken bootstrap verified, starting client patching process.");
-        executorService.execute(() -> injectDependencies(preferences));
+        executorService.execute(this::injectDependencies);
         return true;
     }
 
@@ -292,7 +298,7 @@ public class Launcher {
      * Prepares the parent/system loader with the launcher and Kraken artifacts so RuneLite can resolve them
      * without reflectively mutating RuneLite's own class loader.
      */
-    private void injectDependencies(LauncherPreferences preferences) {
+    private void injectDependencies() {
         try {
             ClassLoader classLoader = waitForRuneLiteClassLoader();
             log.info("RuneLite classLoader located");
@@ -311,19 +317,19 @@ public class Launcher {
                 log.debug("Adding JAR to RuneLite classpath: {}", artifact.getName());
 
                 // The Kraken client and api change often, so they are re-fetched every launch with the bootstrap
-                // kept as the source of truth. They are still SHA-256 verified against the bootstrap hash, they are
-                // just not persisted to the long-lived cache. A verification failure aborts injection (fail closed)
-                // rather than loading unverified code into the client.
+                // kept as the source of truth, and an offline launch uses the copies kept by the last launch that
+                // reached the server. They are SHA-256 verified against the bootstrap hash either way. A verification
+                // failure aborts injection (fail closed) rather than loading unverified code into the client.
                 if (artifact.getName().toLowerCase().startsWith("kraken-client-")) {
                     System.setProperty("kraken-client-version", parseVersion(artifact.getName().toLowerCase(), "kraken-client-"));
-                    File verifiedClient = bootstrapDownloader.downloadVerified(artifact);
+                    File verifiedClient = bootstrapDownloader.fetchLatestArtifact(artifact);
                     addUrlToClassLoader(urlClassLoader, verifiedClient.toURI().toURL());
                     continue;
                 }
 
                 if (artifact.getName().toLowerCase().startsWith("kraken-api-")) {
                     System.setProperty("kraken-api-version", parseVersion(artifact.getName().toLowerCase(), "kraken-api-"));
-                    File verifiedApi = bootstrapDownloader.downloadVerified(artifact);
+                    File verifiedApi = bootstrapDownloader.fetchLatestArtifact(artifact);
                     addUrlToClassLoader(urlClassLoader, verifiedApi.toURI().toURL());
                     continue;
                 }
