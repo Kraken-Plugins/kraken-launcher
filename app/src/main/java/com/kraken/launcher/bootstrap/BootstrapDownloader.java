@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileTime;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
@@ -339,6 +340,9 @@ public class BootstrapDownloader {
             if (offline) {
                 log.info("Using the copy of {} kept by the last launch that reached the Kraken server", artifact.getName());
                 Files.copy(keptCopy.toPath(), tempFile, StandardCopyOption.REPLACE_EXISTING);
+                // Windows carries the kept copy's modified time over, and pruneCache deletes a session copy written
+                // before its process started, so the copy is stamped with the time it was written.
+                Files.setLastModifiedTime(tempFile, FileTime.from(Instant.now()));
             } else {
                 log.info("Downloading and verifying artifact (uncached): {}", artifact.getName());
                 URL url = new URL(artifact.getPath());

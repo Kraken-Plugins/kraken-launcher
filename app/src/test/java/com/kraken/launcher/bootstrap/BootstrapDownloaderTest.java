@@ -203,6 +203,24 @@ public class BootstrapDownloaderTest {
     }
 
     @Test
+    public void offlineSessionCopyOfAnOlderKeptCopyIsNotPruned() throws Exception {
+        Instant start = ProcessHandle.current().info().startInstant().orElse(null);
+        assumeNotNull(start);
+        BootstrapDownloader online = downloader();
+        online.downloadKrakenBootstrap();
+        online.fetchLatestArtifact(artifact(online, API));
+        assertTrue(new File(cacheDir, API).setLastModified(start.minusSeconds(3600).toEpochMilli()));
+
+        server.stop(0);
+        BootstrapDownloader offline = downloader();
+        offline.downloadKrakenBootstrap();
+        File api = offline.fetchLatestArtifact(artifact(offline, API));
+        offline.pruneCache();
+
+        assertTrue(api.exists());
+    }
+
+    @Test
     public void sessionCopyWrittenBeforeItsProcessIdWasReusedIsPruned() throws Exception {
         Instant start = ProcessHandle.current().info().startInstant().orElse(null);
         assumeNotNull(start);
