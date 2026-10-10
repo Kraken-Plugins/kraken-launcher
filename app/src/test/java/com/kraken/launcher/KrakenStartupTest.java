@@ -14,7 +14,7 @@ public class KrakenStartupTest {
         String[] postInstall = {"--postinstall"};
         assertSame(postInstall, KrakenStartup.beforeRuneLite(postInstall));
 
-        String[] second = {"--qa", "--kraken-profile", "RuneWraith"};
+        String[] second = {"--qa", "--kraken-profile", "Foo"};
         assertSame(second, KrakenStartup.beforeRuneLite(second));
     }
 }
