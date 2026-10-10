@@ -17,10 +17,10 @@ import static org.junit.Assert.assertTrue;
 public class KrakenProfilesTest {
 
     /**
-     * A profiles.txt produced by the Profiles plugin's ProfileStore holding one Jagex profile (RuneWraith, session
-     * sess-123, character 307826219) and one legacy username/password profile.
+     * A profiles.txt produced by the Profiles plugin's ProfileStore holding one Jagex profile (MyCharacter, session
+     * sess-123, character 123456789) and one legacy username/password profile.
      */
-    private static final String PLUGIN_PROFILES_FILE = "AAECAwQFBgcICQoLDA0ODz7CpuY9nxTUsQWrnxA4OVADFsy3MCDZpOMZl68CDrIC5dashlC1Y2zBMZVmcxxkOd2UUHowUA8EYijsQ8jPLaJrTD7TU1b/A5TcTfxZVOchRK52//x7KRHc6DvTtrZyaoAM2FgoNBT0KGNArib0hVKu6IvWlxhPKPjBxnwpUR6r6Zp20vLzzB+7QJV9deUCFfOQtuO5gBy8hGuTGYlqF7Brvp/KTTvJGLm+dbiEJAWlLl7TxDQsL6URMfUjZkqPXEx+LrpHMLHE/oyvmllfykelgp1QCKHmLqG1pzjsqfU292JKlwXh98jholtIe9PWoMyub9sQcqhhSXBiOZBiZIZ7I16OwDgRhDIMcXp8p1jT0qtYNsbxDyqVrecQ3F+frYTGiDexfy17RU+ZvgZTpKmKdCkArIMqmUynaAXD7a/iN9i79TTYo9ZsmjnMdjyPjg==";
+    private static final String PLUGIN_PROFILES_FILE = "AAECAwQFBgcICQoLDA0ODz7CpuY9nxTUsQWrnxA4OVCitYQsL/T0xWKIpdxHk2Ew3hsFlqq1tpPRHULPS59Xl6gdHXSDXHhAp1UEJgge/5f36Eg493fI0oz1UQUJhgKVTTjjNp4egiURbB+tS5SU7LylUeV+3wEzFbbSP3fWpTXQeALIOUJaoutMTws+O7NGZkgB/G+U89wicCxDDzfgn+d3qfN0tqgB2+EDbpgPjo582V6MjztBGZuudHLk3Nz2HyTLc1nbTUE8T5fDDbpPlkffZ89XYEQmZHGnrRSNJx+R9I9k3+anEJv0GyEldM+0BaDgcTKBlEJa5WaNkwq7GxKDHXSphNsEZXllfOJGrnW6pmTZB5x3UmowPJmwMpXRMUjtjg3jm5t4/Mkjb8GSTzgZc7sAR/yQ+yz41Jq8eZ4MgtTHHIBl0nFf8WXO/UBR7gYwVhWr/AEeMkRIBnzBdw==";
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
@@ -33,10 +33,10 @@ public class KrakenProfilesTest {
         List<KrakenProfiles.Profile> profiles = KrakenProfiles.load(file);
 
         assertEquals(1, profiles.size());
-        assertEquals("RuneWraith", profiles.get(0).identifier);
-        assertEquals("RuneWraith", profiles.get(0).characterName);
+        assertEquals("MyCharacter", profiles.get(0).identifier);
+        assertEquals("MyCharacter", profiles.get(0).characterName);
         assertEquals("sess-123", profiles.get(0).sessionId);
-        assertEquals("307826219", profiles.get(0).characterId);
+        assertEquals("123456789", profiles.get(0).characterId);
     }
 
     @Test

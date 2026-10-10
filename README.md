@@ -81,7 +81,7 @@ To start the client logged in as a specific Jagex account, link your characters 
 client and then either pick the character from the launcher's "Character" drop down or pass its name on the command line:
 
 ```shell
-./RuneLite.exe --kraken-profile RuneWraith
+./RuneLite.exe --kraken-profile MyCharacter
 ```
 
 The drop down selection is remembered between launches, and `--kraken-profile` overrides it for that launch. The selection
@@ -196,7 +196,7 @@ We use [Semantic Versioning](http://semver.org/) for versioning. For the version
 
 ## Authors
 
-- *Initial Project implementation* - [RuneWraith](https://github.com/cbartram)
+- *Initial Project implementation* - [cbartram](https://github.com/cbartram)
 
 See also the list of [contributors](https://github.com/cbartram/kraken-launcher/graphs/contributors) who participated in this project.
 

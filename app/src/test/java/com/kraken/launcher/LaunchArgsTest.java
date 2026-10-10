@@ -24,20 +24,20 @@ public class LaunchArgsTest {
     @Test
     public void readsAndRemovesKrakensFlags() {
         LaunchArgs args = LaunchArgs.parse(new String[]{
-                "--qa", "--debug", "--force-ui", "--kraken-profile", "RuneWraith", "--hw-accel", "OFF"});
+                "--qa", "--debug", "--force-ui", "--kraken-profile", "MyCharacter", "--hw-accel", "OFF"});
 
         assertTrue(args.isQa());
         assertTrue(args.isForceUi());
-        assertEquals("RuneWraith", args.getProfile());
+        assertEquals("MyCharacter", args.getProfile());
         assertFalse(args.isPassThrough());
         assertArrayEquals(new String[]{"--debug", "--hw-accel", "OFF"}, args.getRuneLiteArgs());
     }
 
     @Test
     public void readsTheProfileWrittenWithAnEqualsSign() {
-        LaunchArgs args = LaunchArgs.parse(new String[]{"--kraken-profile=RuneWraith"});
+        LaunchArgs args = LaunchArgs.parse(new String[]{"--kraken-profile=MyCharacter"});
 
-        assertEquals("RuneWraith", args.getProfile());
+        assertEquals("MyCharacter", args.getProfile());
         assertArrayEquals(new String[0], args.getRuneLiteArgs());
     }
 
