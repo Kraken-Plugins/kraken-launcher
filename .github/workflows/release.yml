@@ -121,6 +121,13 @@ jobs:
           VERSION="${{ steps.version.outputs.VERSION }}"
           JAR_FILE=$(find app/build/libs -name "*-fat.jar" | head -n 1)
           echo "Processing Version: $VERSION"
+          aws --version
+
+          # Since November 2026 SeaweedFS answers CreateMultipartUpload through the public endpoint with
+          # SignatureDoesNotMatch, while single PutObject uploads still succeed. Files under the threshold go up in one
+          # request. Keep it below Cloudflare's 100 MB request body limit; the Windows zip is about 57 MB.
+          aws configure set default.s3.multipart_threshold 90MB
+          ls -l "${{ env.DIST_FILE }}" "$JAR_FILE"
 
           aws s3 cp "${{ env.DIST_FILE }}" \
             "s3://kraken-bootstrap-static/KrakenLauncher-Windows.zip" --endpoint-url "$SEAWEED_URL"
