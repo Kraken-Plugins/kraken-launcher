@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class ClientWatcher {
 
-    private static final long SPLASH_POLL_INTERVAL_MS = 2000;
+    private static final long SPLASH_POLL_INTERVAL_MS = 100;
     private static final long SPLASH_WAIT_TIMEOUT_MS = 120_000;
 
     private final PluginManager pluginManager;
@@ -44,8 +44,9 @@ public class ClientWatcher {
      * When the Kraken jar reached RuneLite's class loader before its core plugin scan, RuneLite has already
      * instantiated the loader plugin and that instance is reused; loading a second one would give RuneLite two
      * plugins named "Kraken Plugins", which it treats as conflicting and disables through the shared config key,
-     * so the loader would never start. If the plugin has already been auto-started by RuneLite, it is stopped and
-     * restarted to prevent inconsistent states.
+     * so the loader would never start. A loader RuneLite has already started is left running: its startUp ran in
+     * RuneLite's own plugin start, after the profile was applied, and stopping and starting it would only make it
+     * sign in and download every plugin a second time.
      *
      * @param krakenLoaderPlugin The {@link Class} object representing the Kraken loader plugin to be
      *                           loaded and started. This must not be {@code null}.
@@ -89,10 +90,9 @@ public class ClientWatcher {
                         krakenClient = loadedPlugins.get(0);
                     }
 
-                    // Check if RuneLite auto-started this plugin from config
                     if (pluginManager.isPluginActive(krakenClient)) {
-                        log.warn("Kraken Loader was auto-started by RuneLite (Zombie state). Restarting...");
-                        pluginManager.stopPlugin(krakenClient);
+                        log.info("RuneLite already started the Kraken loader plugin, leaving it running.");
+                        return;
                     }
 
                     pluginManager.setPluginEnabled(krakenClient, true);
