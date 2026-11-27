@@ -62,6 +62,13 @@ public class BootstrapDownloader {
     @Getter
     private volatile boolean offline = false;
 
+    /**
+     * Why the verified Kraken bootstrap could not be downloaded when the launch is {@link #isOffline() offline},
+     * otherwise null.
+     */
+    @Getter
+    private volatile IOException offlineCause = null;
+
     private final String krakenBootstrapUrl;
     private final File cacheDir;
     private final BiPredicate<byte[], String> signatureVerifier;
@@ -125,8 +132,16 @@ public class BootstrapDownloader {
         } catch (IOException e) {
             log.warn("Unable to download a verified Kraken bootstrap, falling back to the copy saved by an earlier launch: {}", e.getMessage());
             krakenBootstrap = loadSavedBootstrap(e);
+            offlineCause = e;
             offline = true;
         }
+    }
+
+    /**
+     * The host the Kraken bootstrap is downloaded from.
+     */
+    public String getKrakenBootstrapHost() {
+        return URI.create(krakenBootstrapUrl).getHost();
     }
 
     private Bootstrap parseBootstrap(byte[] bootstrapBytes) {

@@ -74,10 +74,12 @@ jobs:
           mv "$WIN64_RELEASE-jre" jre-windows
 
           rm windows-jre.zip
+          echo "JRE_RELEASE=$WIN64_RELEASE" >> $GITHUB_ENV
 
+      # The zip keeps the same name in every release, so
+      # https://github.com/<owner>/<repo>/releases/latest/download/KrakenLauncher-Windows.zip always serves the newest one.
       - name: Create Distribution Bundle
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
           EXE_FILE="app/build/launch4j/KrakenInstaller.exe"
           mkdir -p dist/KrakenLauncher
           
@@ -89,9 +91,9 @@ jobs:
           
           # Zip it all up
           cd dist
-          zip -r "KrakenLauncher-v$VERSION-Windows.zip" KrakenLauncher
-          
-          echo "DIST_FILE=dist/KrakenLauncher-v$VERSION-Windows.zip" >> $GITHUB_ENV
+          zip -r KrakenLauncher-Windows.zip KrakenLauncher
+
+          echo "DIST_FILE=dist/KrakenLauncher-Windows.zip" >> $GITHUB_ENV
 
       - name: Create and Push Git Tag
         run: |
@@ -108,7 +110,9 @@ jobs:
             echo "Created and pushed tag: $TAG_NAME"
           fi
 
-      - name: Upload to SeaweedFS
+      # KrakenInstaller.exe, including every copy already downloaded, fetches KrakenSetup.jar and its .sha256 from
+      # SeaweedFS at install time, so both are still published there. The Windows zip is served from the GitHub release.
+      - name: Upload Installer Jar to SeaweedFS
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.SEAWEED_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.SEAWEED_SECRET_KEY }}
@@ -125,12 +129,10 @@ jobs:
 
           # Since November 2026 SeaweedFS answers CreateMultipartUpload through the public endpoint with
           # SignatureDoesNotMatch, while single PutObject uploads still succeed. Files under the threshold go up in one
-          # request. Keep it below Cloudflare's 100 MB request body limit; the Windows zip is about 57 MB.
+          # request. Keep it below Cloudflare's 100 MB request body limit.
           aws configure set default.s3.multipart_threshold 90MB
-          ls -l "${{ env.DIST_FILE }}" "$JAR_FILE"
+          ls -l "$JAR_FILE"
 
-          aws s3 cp "${{ env.DIST_FILE }}" \
-            "s3://kraken-bootstrap-static/KrakenLauncher-Windows.zip" --endpoint-url "$SEAWEED_URL"
           aws s3 cp "$JAR_FILE" \
             "s3://kraken-bootstrap-static/KrakenSetup.jar" --endpoint-url "$SEAWEED_URL"
 
@@ -139,12 +141,21 @@ jobs:
           aws s3 cp app/build/libs/KrakenSetup.jar.sha256 \
             "s3://kraken-bootstrap-static/KrakenSetup.jar.sha256" --endpoint-url "$SEAWEED_URL"
 
+      - name: Write Release Notes
+        run: |
+          JAR_FILE=$(find app/build/libs -name "*-fat.jar" | head -n 1)
+          bash scripts/release-notes.sh "v${{ steps.version.outputs.VERSION }}" \
+            "${{ env.DIST_FILE }}" app/build/launch4j/KrakenInstaller.exe "$JAR_FILE" > dist/release-notes.md
+          cat dist/release-notes.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            ${{ env.DIST_FILE }}
             app/build/launch4j/KrakenInstaller.exe
             app/build/libs/*-fat.jar
+          body_path: dist/release-notes.md
           # IMPORTANT: We use the calculated version for the tag, not the branch name
           tag_name: v${{ steps.version.outputs.VERSION }}
           name: Release ${{ steps.version.outputs.VERSION }}

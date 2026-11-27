@@ -3,6 +3,8 @@ package com.kraken.launcher;
 import com.google.gson.*;
 import com.kraken.launcher.bootstrap.BootstrapDownloader;
 import com.kraken.launcher.ui.Theme;
+import com.kraken.launcher.util.DnsCheck;
+import com.kraken.launcher.util.DnsProblemException;
 import com.kraken.launcher.util.Utils;
 import lombok.extern.slf4j.Slf4j;
 
@@ -48,6 +50,7 @@ public class Installer {
 
     private static final int DOWNLOAD_CONNECT_TIMEOUT_MS = 10_000;
     private static final int DOWNLOAD_READ_TIMEOUT_MS = 60_000;
+    private static final String RETRY_INSTALL = "run the installer again";
 
     public static void main(String[] args) {
         log.info("Starting Kraken Installation process...");
@@ -170,6 +173,15 @@ public class Installer {
                             "Success", JOptionPane.INFORMATION_MESSAGE, icon);
                 } catch (Exception ex) {
                     Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    if (cause instanceof DnsProblemException) {
+                        DnsCheck.Result dns = ((DnsProblemException) cause).getResult();
+                        statusLabel.setForeground(new Color(220, 80, 80));
+                        statusLabel.setText(dns.title());
+                        log.error("Install stopped by a DNS problem for {}: {} {}", dns.getHost(), dns.getVerdict(),
+                                dns.getAddresses(), cause);
+                        JOptionPane.showMessageDialog(frame, cause.getMessage(), dns.title(), JOptionPane.ERROR_MESSAGE);
+                        return;
+                    }
                     statusLabel.setForeground(new Color(220, 80, 80));
                     statusLabel.setText("Failed — see error dialogue.");
                     log.error("Operation failed: ", cause);
@@ -210,8 +222,9 @@ public class Installer {
             jarName = "KrakenSetup.jar";
             File targetJar = new File(targetDir, jarName);
             String base = "https://seaweed.kraken-plugins.com/kraken-bootstrap-static/";
-            log.info("Running as .exe file, fetching JAR from SeaweedFS: {}{}", base, jarName);
-            downloadAndVerifyJar(new URL(base + jarName), new URL(base + jarName + ".sha256"), targetDir, targetJar);
+            URL jarUrl = new URL(base + jarName);
+            log.info("Running as .exe file, fetching JAR from SeaweedFS: {}", jarUrl);
+            downloadKrakenSetup(jarUrl, new URL(base + jarName + ".sha256"), targetDir, targetJar);
             log.info("Successfully downloaded and verified: {} into: {}", jarName, targetJar.getAbsolutePath());
         } else {
             log.info("Running as jar file, copying self to RuneLite directory.");
@@ -274,6 +287,31 @@ public class Installer {
             }
         }
         return -1;
+    }
+
+    /**
+     * Downloads and verifies KrakenSetup.jar, explaining DNS blocks instead of surfacing the raw network error. A
+     * lookup that can only be a block stops the install before any connection is tried, so the player is not left
+     * waiting on connection timeouts. When the download fails to connect, the lookup is checked again for any answer
+     * that is not Kraken's server.
+     */
+    private static void downloadKrakenSetup(URL jarUrl, URL checksumUrl, File targetDir, File targetJar) throws IOException {
+        DnsCheck.Result dns = DnsCheck.check(jarUrl.getHost());
+        if (dns.isCertainlyBlocked()) {
+            throw new DnsProblemException(dns, RETRY_INSTALL, null);
+        }
+
+        try {
+            downloadAndVerifyJar(jarUrl, checksumUrl, targetDir, targetJar);
+        } catch (IOException e) {
+            if (DnsCheck.isConnectionFailure(e)) {
+                DnsCheck.Result after = DnsCheck.check(jarUrl.getHost());
+                if (after.getVerdict() != DnsCheck.Verdict.OK) {
+                    throw new DnsProblemException(after, RETRY_INSTALL, e);
+                }
+            }
+            throw e;
+        }
     }
 
     /**

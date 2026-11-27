@@ -5,6 +5,7 @@ import com.kraken.launcher.bootstrap.model.Artifact;
 import com.kraken.launcher.bootstrap.model.Bootstrap;
 import com.kraken.launcher.ui.FatalErrorDialog;
 import com.kraken.launcher.ui.LauncherPreferences;
+import com.kraken.launcher.util.DnsCheck;
 import com.kraken.launcher.util.Utils;
 import lombok.extern.slf4j.Slf4j;
 import net.bytebuddy.agent.ByteBuddyAgent;
@@ -44,6 +45,7 @@ public class Launcher {
     private static final long SHUTDOWN_TIMEOUT_SECONDS = 10;
     private static final String RUNELITE_PACKAGE = "net.runelite.client.rs";
     private static final String LAUNCHER_CLASS = "net.runelite.launcher.Launcher";
+    private static final String RETRY_LAUNCH = "start RuneLite again";
     private static final String RUNELITE_FORK_ARG = "--classpath";
 
     private final ExecutorService executorService;
@@ -233,7 +235,7 @@ public class Launcher {
             bootstrapDownloader.downloadRuneLiteBootstrap();
         } catch (IOException e) {
             log.error("Error fetching one of the bootstrap files, shutting down: ", e);
-            showFatalError("The Kraken Client is currently offline. Could not fetch RuneLite or Kraken's bootstrap.");
+            showFatalError(bootstrapFailureMessage(e));
             return false;
         }
 
@@ -246,6 +248,7 @@ public class Launcher {
         if (bootstrapDownloader.isOffline()) {
             log.warn("The Kraken server is unreachable. Starting from the Kraken bootstrap and client saved by an " +
                     "earlier launch; Kraken sign-in and plugins may be unavailable, sideloaded plugins still load.");
+            warnIfDnsBlocked();
         }
 
         // An offline launch is still checked: the saved bootstrap must match RuneLite's current client.
@@ -596,6 +599,51 @@ public class Launcher {
                 + "Kraken team to ensure it keeps the client safe and undetected. \n\n"
                 + "If you would like to run vanilla RuneLite from this launcher, check the \"RuneLite Mode\" option "
                 + "in the launcher UI or skip this message AT YOUR OWN RISK by checking the \"Skip Update Check\" checkbox.";
+    }
+
+    /**
+     * The fatal error shown when a bootstrap cannot be fetched and no saved copy can stand in. When the Kraken
+     * bootstrap is the one that failed to connect and the player's DNS is the cause, the DNS explanation replaces the
+     * generic offline message. A RuneLite bootstrap failure leaves the Kraken bootstrap set, so it is never blamed on
+     * the Kraken host's DNS.
+     */
+    private String bootstrapFailureMessage(IOException failure) {
+        if (bootstrapDownloader.getKrakenBootstrap() == null && DnsCheck.isConnectionFailure(failure)) {
+            DnsCheck.Result dns = DnsCheck.check(bootstrapDownloader.getKrakenBootstrapHost());
+            if (dns.getVerdict() != DnsCheck.Verdict.OK) {
+                return dns.message(RETRY_LAUNCH);
+            }
+        }
+        return "The Kraken Client is currently offline. Could not fetch RuneLite or Kraken's bootstrap.";
+    }
+
+    /**
+     * Warns the player when an offline launch is caused by their DNS blocking Kraken, since the launch otherwise
+     * continues without saying why sign-in and plugins are unavailable. Only a bootstrap download that failed to
+     * connect is checked, so a Kraken outage behind Cloudflare (an error status) never shows it. The dialog is not
+     * fatal: the launch carries on from the saved bootstrap once it is closed. A --health-check launch only logs the
+     * result.
+     */
+    private void warnIfDnsBlocked() {
+        if (!DnsCheck.isConnectionFailure(bootstrapDownloader.getOfflineCause())) {
+            return;
+        }
+        DnsCheck.Result dns = DnsCheck.check(bootstrapDownloader.getKrakenBootstrapHost());
+        if (!dns.isBlocked() || HealthCheck.isActive()) {
+            return;
+        }
+        String message = "Kraken is starting from the copy saved by your last launch, so Kraken sign-in and\n"
+                + "plugins may not work until this is fixed.\n\n" + dns.message(RETRY_LAUNCH);
+        Runnable show = () -> JOptionPane.showMessageDialog(null, message, dns.title(), JOptionPane.WARNING_MESSAGE);
+        try {
+            if (SwingUtilities.isEventDispatchThread()) {
+                show.run();
+            } else {
+                SwingUtilities.invokeAndWait(show);
+            }
+        } catch (Exception e) {
+            log.error("Failed to show the DNS warning dialog: ", e);
+        }
     }
 
     /**

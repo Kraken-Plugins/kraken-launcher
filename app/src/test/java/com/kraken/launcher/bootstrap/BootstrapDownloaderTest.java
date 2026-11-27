@@ -1,6 +1,7 @@
 package com.kraken.launcher.bootstrap;
 
 import com.kraken.launcher.bootstrap.model.Artifact;
+import com.kraken.launcher.util.DnsCheck;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.After;
 import org.junit.Before;
@@ -104,6 +105,8 @@ public class BootstrapDownloaderTest {
 
         assertTrue(offline.isOffline());
         assertEquals("injected-hash", offline.getKrakenBootstrap().getHash());
+        assertNull(online.getOfflineCause());
+        assertTrue(DnsCheck.isConnectionFailure(offline.getOfflineCause()));
     }
 
     @Test
@@ -111,8 +114,9 @@ public class BootstrapDownloaderTest {
         server.stop(0);
         BootstrapDownloader offline = downloader();
 
-        assertThrows(IOException.class, offline::downloadKrakenBootstrap);
+        IOException failure = assertThrows(IOException.class, offline::downloadKrakenBootstrap);
         assertNull(offline.getKrakenBootstrap());
+        assertTrue(DnsCheck.isConnectionFailure(failure));
     }
 
     @Test
@@ -137,6 +141,7 @@ public class BootstrapDownloaderTest {
 
         assertTrue(downloader.isOffline());
         assertEquals("injected-hash", downloader.getKrakenBootstrap().getHash());
+        assertFalse(DnsCheck.isConnectionFailure(downloader.getOfflineCause()));
     }
 
     @Test
